@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Artist {
+  id             String   @id @default(cuid())
+  walletAddress  String   @unique
+  handle         String   @unique
+  displayName    String
+  bio            String?
+  approvalStatus String   @default("approved")
+  createdAt      DateTime @default(now())
+  lots           Lot[]
+}
+
+model Lot {
+  id              String   @id @default(cuid())
+  chainId         Int
+  auctionAddress  String
+  lotId           String
+  nftAddress      String
+  tokenId         String
+  creator         String
+  metadataUri     String
+  title           String?
+  imageUrl        String?
+  artistName      String?
+  artistHandle    String?
+  reserveWei      String
+  buyNowWei       String?
+  minIncrementWei String?
+  highestBidWei   String   @default("0")
+  highestBidder   String?
+  startTime       DateTime
+  endTime         DateTime
+  status          String   @default("indexed") // "indexed", "active", "settled", "cancelled"
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  artistId        String?
+  artist          Artist?  @relation(fields: [artistId], references: [id])
+  bids            Bid[]
+  patronMints     PatronMint[]
+  @@unique([chainId, auctionAddress, lotId])
+}
+
+model Bid {
+  id              String   @id @default(cuid())
+  chainId         Int
+  transactionHash String
+  lotId           String
+  bidder          String
+  amountWei       String
+  blockNumber     String
+  logIndex        Int
+  timestamp       DateTime
+  lot             Lot      @relation(fields: [lotId], references: [id])
+  @@unique([chainId, transactionHash, logIndex])
+}
+
+model PatronMint {
+  id              String   @id @default(cuid())
+  chainId         Int
+  transactionHash String
+  lotId           String
+  minter          String
+  blockNumber     String
+  logIndex        Int
+  timestamp       DateTime @default(now())
+  lot             Lot      @relation(fields: [lotId], references: [id])
+  @@unique([chainId, transactionHash, logIndex])
+}
+
+model IndexedEvent {
+  id              String   @id @default(cuid())
+  chainId         Int
+  transactionHash String
+  logIndex        Int
+  eventName       String
+  blockNumber     String
+  payload         String
+  createdAt       DateTime @default(now())
+  @@unique([chainId, transactionHash, logIndex])
+}
+
+model IndexerState {
+  id                 String   @id @default(cuid())
+  chainId            Int      @unique
+  lastProcessedBlock String   @default("0")
+  lastProcessedHash  String?
+  currentBlock       String   @default("0")
+  lastSyncAt         DateTime?
+  startedAt          DateTime  @default(now())
+  status             String    @default("starting")
+  retryCount         Int       @default(0)
+  deadLetterCount    Int       @default(0)
+  lastError          String?
+  updatedAt          DateTime @updatedAt
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  wallet    String
+  type      String
+  payload   String
+  createdAt DateTime @default(now())
+}
+
+model DelistedToken {
+  id              String   @id @default(cuid())
+  contractAddress String
+  tokenId         String
+  reason          String
+  delistedAt      DateTime @default(now())
+
+  @@unique([contractAddress, tokenId])
+}
+
+model SiweNonce {
+  id        String   @id @default(cuid())
+  nonce     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  address   String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Offer {
+  id               String   @id @default(cuid())
+  chainId          Int
+  nftAddress       String
+  tokenId          String
+  buyer            String
+  amountWei        String
+  counterAmountWei String   @default("0")
+  status           String   @default("active") // "active", "countered", "accepted", "cancelled"
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([chainId, nftAddress, tokenId, buyer])
+}
+
+model LazyVoucher {
+  id          String   @id @default(cuid())
+  chainId     Int
+  nftAddress  String
+  tokenId     String
+  minPriceWei String
+  metadataUri String
+  artist      String
+  nonce       String
+  signature   String
+  title       String?
+  imageUrl    String?
+  artistName  String?
+  status      String   @default("active") // "active", "redeemed", "cancelled"
+  redeemedBy  String?
+  redeemedTx  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([chainId, nftAddress, tokenId, nonce])
+}
+

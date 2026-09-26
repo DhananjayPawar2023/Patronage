@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Build output
+dist/
+build/
+.cache/
+
+# Foundry / Solidity compilation artifacts
+contracts/out/
+contracts/cache/
+clean-room/contracts/out/
+clean-room/contracts/cache/
+
+# Executables & binaries
+*.exe
+*.dll
+*.so
+*.dylib
+tools/foundry/*.exe
+clean-room/tools/foundry/*.exe
+
+# SQLite databases & temp data
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+data/*.db
+data/*.db-*
+prisma/*.db
+prisma/*.db-*
+dev.db
+
+# Uploads and temporary user assets
+uploads/*
+!uploads/.gitkeep
+
+# Testing & clean-room temporary directories
+clean-room/
+coverage/
+.nyc_output/
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db

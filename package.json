@@ -1,0 +1,41 @@
+{
+  "name": "patronage-auction-house",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/local-dev.mjs",
+    "dev:web": "vite --host 127.0.0.1 --port 4173",
+    "dev:chain": "node scripts/local-chain.mjs",
+    "compile": "node scripts/compile-contracts.mjs",
+    "contracts:test": "tools\\foundry\\forge.exe test --root contracts",
+    "contracts:coverage": "tools\\foundry\\forge.exe coverage --root contracts",
+    "test:local-vertical": "node scripts/test-local-vertical-slice.mjs",
+    "test:api-security": "node scripts/test-api-security.mjs",
+    "test:siwe-runtime": "node scripts/test-siwe-runtime.mjs",
+    "deploy": "node scripts/deploy.mjs",
+    "deploy:local": "node scripts/deploy-local.mjs",
+    "api": "node api/server.mjs",
+    "indexer": "node services/indexer/vendored-adapter.mjs",
+    "indexer:legacy": "node services/indexer/index.mjs",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:reset:local": "prisma db push --force-reset",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@prisma/client": "6.18.0",
+    "@vitejs/plugin-react": "6.0.4",
+    "prisma": "6.18.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "viem": "2.55.10",
+    "vite": "8.1.5"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "5.2.0",
+    "ganache": "^7.9.2",
+    "solc": "0.8.24"
+  }
+}

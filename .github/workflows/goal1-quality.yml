@@ -1,0 +1,22 @@
+name: Goal 1 quality gates
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: npm ci
+      - run: npm run contracts:test
+      - run: npm run contracts:coverage
+      - run: pip install slither-analyzer
+      - run: npx solhint 'contracts/**/*.sol'
+      - run: slither contracts --config-file slither.config.json
