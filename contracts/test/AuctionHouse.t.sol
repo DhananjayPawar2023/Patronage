@@ -6,6 +6,7 @@ import {AuctionHouse} from "../src/AuctionHouse.sol";
 import {ArtworkNFT} from "../src/ArtworkNFT.sol";
 import {PatronEdition} from "../src/PatronEdition.sol";
 import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 
 contract ReceiverContract is IERC721Receiver {
     function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4) {
@@ -23,6 +24,7 @@ contract RevertingReceiver {
 
 contract AuctionHouseTest is Test {
     AuctionHouse internal auction;
+    ArtworkNFT internal impl;
     ArtworkNFT internal nft;
     PatronEdition internal edition;
     ReceiverContract internal receiver;
@@ -38,7 +40,8 @@ contract AuctionHouseTest is Test {
 
     function setUp() public {
         auction = new AuctionHouse(treasury, PROTOCOL_FEE, ANTI_SNIPE);
-        nft = new ArtworkNFT();
+        impl = new ArtworkNFT();
+        nft = ArtworkNFT(Clones.clone(address(impl)));
         edition = new PatronEdition("local://patron/", address(this), 0.1 ether);
         auction.setPatronEdition(address(edition));
         edition.grantRole(edition.AUCTION_ROLE(), address(auction));
@@ -232,7 +235,7 @@ contract AuctionHouseTest is Test {
 
     function test_PaymentFailureBecomesRecoverableRefund() public {
         AuctionHouse failingAuction = new AuctionHouse(payable(address(revertingSeller)), PROTOCOL_FEE, ANTI_SNIPE);
-        ArtworkNFT nft2 = new ArtworkNFT();
+        ArtworkNFT nft2 = ArtworkNFT(Clones.clone(address(impl)));
         nft2.initialize("Second Art", "ART2", seller, address(this), seller, 500);
         vm.startPrank(seller);
         nft2.mint("local://nft/2.json");
@@ -245,6 +248,16 @@ contract AuctionHouseTest is Test {
         vm.warp(block.timestamp + 1 days + 1);
         failingAuction.settle(1);
         assertGt(failingAuction.refundable(address(revertingSeller)), 0);
+    }
+
+    function test_ImplementationCannotBeInitialized() public {
+        vm.expectRevert(ArtworkNFT.AlreadyInitialized.selector);
+        impl.initialize("Exploit", "EXP", address(0x999), address(auction), address(0x999), 500);
+    }
+
+    function test_CloneCannotBeInitializedTwice() public {
+        vm.expectRevert(ArtworkNFT.AlreadyInitialized.selector);
+        nft.initialize("SecondInit", "SEC", seller, address(auction), seller, 500);
     }
 
     function test_BuyNowInstantSettlement() public {

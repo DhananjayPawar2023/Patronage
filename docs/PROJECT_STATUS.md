@@ -11,7 +11,9 @@ This document reflects the verified state of the Patronage codebase based on dir
   - Nonce-protected, pull-over-push escrow accounting (`withdrawRefund`) preventing reentrancy/DoS.
   - Anti-snipe time extension (configurable, default 300s).
   - Sovereign artist clones (EIP-1167) with on-chain EIP-2981 royalty enforcement.
-  - 23/23 passing Foundry tests (`tools/foundry/forge.exe test --root contracts`), including an invariant fuzz suite executing 128,000 calls across state transitions.
+  - **43/43 passing Foundry tests** (`tools/foundry/forge.exe test --root contracts`), including an invariant fuzz suite executing 128,000 calls across state transitions and dedicated property tests (`AuctionAccountingInvariant.t.sol`).
+  - **EIP-1167 Implementation Lockout:** Base `ArtworkNFT` implementation contract sets `initialized = true` in constructor, preventing any attacker from initializing or establishing state on the implementation contract.
+  - **EIP-712 Voucher Expiration:** Added `deadline` to `NFTVoucher` and `VOUCHER_TYPEHASH`, rejecting expired or zero-deadline vouchers on-chain and in API.
   - Fast-path `OPERATOR_ROLE` emergency pause split from 48-hour `TimelockController` fee/parameter updates (verified in `contracts/test/TimelockAndPause.t.sol`).
 
 * **Governance & Deployment Wiring:**
@@ -20,6 +22,10 @@ This document reflects the verified state of the Patronage codebase based on dir
   - **Safe Multi-Sig Guard:** Remote/mainnet deploys require `TIMELOCK_PROPOSERS` with multi-sig co-signers; local sandbox flags `isMultisigConfigured: false` and `migrationPending: true`.
 
 * **Backend Security, RBAC & Sanctions Automation:**
+  - **P0 SIWE Nonce Concurrency & Atomicity:** Implemented atomic single-statement nonce consumption (`DELETE FROM "SiweNonce" WHERE "nonce" = ? AND "expiresAt" > ?`) returning affected row count, eliminating race conditions under concurrent requests. Verified with 10-way concurrency test (`scripts/test-siwe-concurrency.mjs`: exactly 1 accepted, 9 rejected).
+  - **P0 Hardened SIWE Message Validation:** Strict verification of domain against request host/whitelist, URI against origin, chain ID against active chain, freshness within 10m, and strict rejection of notBefore/expiration violations.
+  - **P1 Storage & File Upload Security:** Magic-bytes verification (PNG, JPEG, GIF, WEBP, SVG), path traversal (`../`, `..\`) protection, filename sanitization, content hashing, and size limit enforcement (`scripts/test-upload-security.mjs`).
+  - **P1 API Hardening & Security Headers:** HSTS, Content-Security-Policy, Permissions-Policy, X-Content-Type-Options, rate limiting, and CORS restricted to configured trusted origins (`scripts/test-api-security.mjs`).
   - Role-Based Access Control: `/api/admin/artists/*` and `/api/admin/sanctions/*` restricted to configured `ADMIN_ADDRESSES` (401 unauth, 403 non-admin).
   - Moderation protection: `POST /api/moderation/delist` and `GET /api/moderation/delisted` restricted to `ADMIN_ADDRESSES` / `MODERATOR_ADDRESSES`.
   - Durable SIWE Authentication: Sessions and single-use nonces stored in Prisma database (`Session` and `SiweNonce` tables), persisting across API server restarts.
@@ -68,7 +74,7 @@ This document reflects the verified state of the Patronage codebase based on dir
   - **Marketplace API & UI Integration:** Artists toggle between "Timed English Auction" and "Gasless Lazy Mint" in `CreateDropModal`. Active vouchers are stored in `LazyVoucher` table via `POST /api/vouchers` and rendered in the gallery feed with `⚡ LAZY MINT` badges, filtering, and dedicated claim modals.
 
 * **Master Pre-Flight Pipeline:**
-  - All 18/18 automated verification pipelines pass cleanly in `scripts/verify-all.mjs` (including 30/30 Foundry tests, Anvil forks, indexer kill/restart, master 25-step acceptance flow, PostgreSQL dialect validation, and the complete EIP-712 lazy mint & on-chain offers flow).
+  - All 21/21 automated verification pipelines pass cleanly in `scripts/verify-all.mjs` (including 43/43 Foundry tests with 128k fuzz calls, P0 SIWE concurrency, P1 storage security, P1 API security, Anvil forks, indexer kill/restart, master 25-step acceptance flow, PostgreSQL dialect validation, and the complete EIP-712 lazy mint & on-chain offers flow).
 
 ---
 

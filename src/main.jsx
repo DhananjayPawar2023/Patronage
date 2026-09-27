@@ -552,6 +552,7 @@ function App() {
         uri: voucher.metadataUri,
         artist: voucher.artist,
         nonce: BigInt(voucher.nonce),
+        deadline: BigInt(voucher.deadline || (Math.floor(Date.now() / 1000) + 86400).toString()),
       };
 
       const hash = await walletClient.writeContract({
@@ -931,6 +932,7 @@ function App() {
           chainId: activeNetwork.id,
           verifyingContract: collectionAddr,
         };
+        const voucherDeadline = BigInt(Math.floor(Date.now() / 1000) + 30 * 24 * 3600); // 30-day voucher validity
         const types = {
           NFTVoucher: [
             { name: 'nft', type: 'address' },
@@ -939,6 +941,7 @@ function App() {
             { name: 'uri', type: 'string' },
             { name: 'artist', type: 'address' },
             { name: 'nonce', type: 'uint256' },
+            { name: 'deadline', type: 'uint256' },
           ],
         };
         const message = {
@@ -948,6 +951,7 @@ function App() {
           uri: metadataUri,
           artist: activeAccount.address,
           nonce: voucherNonce,
+          deadline: voucherDeadline,
         };
 
         let signature;
@@ -984,6 +988,7 @@ function App() {
             metadataUri,
             artist: activeAccount.address,
             nonce: voucherNonce.toString(),
+            deadline: voucherDeadline.toString(),
             signature,
             title: dropTitle,
             imageUrl: uploadBody.data?.imageUrl,

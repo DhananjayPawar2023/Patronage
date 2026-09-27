@@ -648,11 +648,34 @@ const artworkEvents = {
   },
 };
 
+const chainHead = await client.getBlockNumber();
 const checkpoint = await prisma.indexerState.findUnique({ where: { chainId } });
+const storeCursor = await store.getCursor('_indexer');
+
+if ((checkpoint && BigInt(checkpoint.lastProcessedBlock) > chainHead) || (storeCursor !== undefined && storeCursor > chainHead)) {
+  console.warn(`[vendored-indexer] Detected chain reset behind checkpoint/cursor (chainTip=${chainHead}, checkpoint=${checkpoint?.lastProcessedBlock}, storeCursor=${storeCursor}). Resetting store and checkpoint...`);
+  await store.clearDerivedState();
+  await store.removeEventsFrom?.(0n);
+  const cursors = await store.getAllCursors?.();
+  if (cursors) {
+    for (const [name] of cursors) {
+      await store.deleteCursor?.(name);
+    }
+  }
+  await prisma.$transaction([
+    prisma.patronMint.deleteMany({}),
+    prisma.bid.deleteMany({}),
+    prisma.lot.deleteMany({}),
+    prisma.indexedEvent.deleteMany({}),
+    prisma.indexerState.deleteMany({ where: { chainId } }),
+  ]);
+}
+
+const activeCheckpoint = await prisma.indexerState.findUnique({ where: { chainId } });
 const startBlock = process.env.INDEXER_REPLAY_FROM
   ? BigInt(process.env.INDEXER_REPLAY_FROM)
-  : checkpoint
-    ? BigInt(checkpoint.lastProcessedBlock) + 1n
+  : activeCheckpoint
+    ? BigInt(activeCheckpoint.lastProcessedBlock) + 1n
     : BigInt(deployment.deploymentBlock || 0);
 
 const contracts = {
@@ -776,11 +799,18 @@ async function checkReorgCondition(currentBlockNumber) {
   if (!currentCheckpoint) return false;
 
   const cpNum = BigInt(currentCheckpoint.lastProcessedBlock || '0');
+  const head = (currentBlockNumber && currentBlockNumber > 0n) ? currentBlockNumber : await client.getBlockNumber();
+
+  // Case 0: Chain was reset/restarted behind checkpoint
+  if (cpNum > head) {
+    console.warn(`[vendored-indexer] Chain reset detected: checkpoint block ${cpNum} > chain tip ${head}. Replaying from genesis...`);
+    await executeWipeAndReplay(head);
+    return true;
+  }
 
   // Case 1: Checkpoint explicitly reset to 0 (e.g. Step 22 wipe test)
   if (cpNum === 0n || currentCheckpoint.status === 'rebuilding') {
-    const target = (currentBlockNumber && currentBlockNumber > 0n) ? currentBlockNumber : await client.getBlockNumber();
-    await executeWipeAndReplay(target);
+    await executeWipeAndReplay(head);
     return true;
   }
 
@@ -789,8 +819,7 @@ async function checkReorgCondition(currentBlockNumber) {
     const onChainBlock = await client.getBlock({ blockNumber: cpNum }).catch(() => null);
     if (onChainBlock && onChainBlock.hash !== currentCheckpoint.lastProcessedHash) {
       console.warn(`[vendored-indexer] Hash divergence detected at block ${cpNum}: ${currentCheckpoint.lastProcessedHash} ≠ ${onChainBlock.hash}`);
-      const target = (currentBlockNumber && currentBlockNumber > 0n) ? currentBlockNumber : await client.getBlockNumber();
-      await executeWipeAndReplay(target);
+      await executeWipeAndReplay(head);
       return true;
     }
   }
@@ -852,7 +881,7 @@ indexer.onStatus(async (status) => {
       state.stopped = true;
       indexer.stop();
       await prisma.$disconnect();
-      process.exit(0);
+      setTimeout(() => process.exit(0), 50);
     }
   }
 });

@@ -64,23 +64,87 @@ let sanctionsSyncTimer = null;
 const SESSION_PRUNE_INTERVAL_MS = Number(process.env.SESSION_PRUNE_INTERVAL_MS || 60 * 60 * 1000); // 1 hour
 let sessionPruneTimer = null;
 
-function send(response, status, body, contentType = 'application/json; charset=utf-8') {
-  response.writeHead(status, {
+const TRUSTED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'http://127.0.0.1:4173,http://localhost:4173,http://127.0.0.1:8787')
+  .split(',')
+  .map((o) => o.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
+function resolveCorsOrigin(requestOrigin) {
+  if (!requestOrigin) return TRUSTED_ORIGINS[0] || 'http://127.0.0.1:4173';
+  const cleanOrigin = requestOrigin.replace(/\/$/, '');
+  if (TRUSTED_ORIGINS.includes(cleanOrigin) || process.env.NODE_ENV !== 'production') {
+    return cleanOrigin;
+  }
+  return TRUSTED_ORIGINS[0] || 'http://127.0.0.1:4173';
+}
+
+function send(response, status, body, contentType = 'application/json; charset=utf-8', reqOrigin = null) {
+  const headers = {
     'content-type': contentType,
     'cache-control': 'no-store',
-    'access-control-allow-origin': process.env.ALLOWED_ORIGIN || 'http://127.0.0.1:4173',
+    'access-control-allow-origin': resolveCorsOrigin(reqOrigin),
     'access-control-allow-methods': 'GET, POST, OPTIONS',
     'access-control-allow-headers': 'Content-Type, Authorization',
     'x-content-type-options': 'nosniff',
     'x-frame-options': 'DENY',
-    'referrer-policy': 'no-referrer',
-    'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
-  });
+    'referrer-policy': 'strict-origin-when-cross-origin',
+    'permissions-policy': 'geolocation=(), camera=(), microphone=(), payment=()',
+    'cross-origin-opener-policy': 'same-origin',
+    'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: ipfs:; connect-src 'self' https: ws: wss:; frame-ancestors 'none'",
+  };
+
+  if (process.env.NODE_ENV === 'production') {
+    headers['strict-transport-security'] = 'max-age=31536000; includeSubDomains; preload';
+  }
+
+  response.writeHead(status, headers);
   if (typeof body === 'string' || Buffer.isBuffer(body)) {
     response.end(body);
   } else {
     response.end(JSON.stringify(body));
   }
+}
+
+function validateFileContentAndSignature(buffer, declaredMime, rawFilename) {
+  if (!rawFilename || typeof rawFilename !== 'string') {
+    return { valid: false, reason: 'Filename is required' };
+  }
+  if (rawFilename.includes('\0')) {
+    return { valid: false, reason: 'Filename contains forbidden null-bytes' };
+  }
+  // Sanitize path traversal sequences
+  const baseName = path.posix.basename(rawFilename.replace(/\\/g, '/')).replace(/[^a-zA-Z0-9._-]/g, '_');
+  const ext = path.extname(baseName).toLowerCase();
+  const allowedExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'];
+  if (!allowedExtensions.includes(ext)) {
+    return { valid: false, reason: `Unsupported file extension: ${ext}. Allowed extensions: PNG, JPG, JPEG, WEBP, GIF, SVG.` };
+  }
+
+  const mime = declaredMime.toLowerCase();
+  if (mime === 'image/png') {
+    if (buffer.length < 8 || buffer[0] !== 0x89 || buffer[1] !== 0x50 || buffer[2] !== 0x4E || buffer[3] !== 0x47) {
+      return { valid: false, reason: 'File content does not match PNG signature.' };
+    }
+  } else if (mime === 'image/jpeg' || mime === 'image/jpg') {
+    if (buffer.length < 3 || buffer[0] !== 0xFF || buffer[1] !== 0xD8 || buffer[2] !== 0xFF) {
+      return { valid: false, reason: 'File content does not match JPEG signature.' };
+    }
+  } else if (mime === 'image/gif') {
+    if (buffer.length < 6 || buffer[0] !== 0x47 || buffer[1] !== 0x49 || buffer[2] !== 0x46) {
+      return { valid: false, reason: 'File content does not match GIF signature.' };
+    }
+  } else if (mime === 'image/webp') {
+    if (buffer.length < 12 || buffer.subarray(0, 4).toString('ascii') !== 'RIFF' || buffer.subarray(8, 12).toString('ascii') !== 'WEBP') {
+      return { valid: false, reason: 'File content does not match WEBP signature.' };
+    }
+  } else if (mime === 'image/svg+xml') {
+    const text = buffer.subarray(0, 512).toString('utf-8').trim();
+    if (!text.includes('<svg') && !text.includes('<?xml')) {
+      return { valid: false, reason: 'File content does not match SVG XML format.' };
+    }
+  }
+
+  return { valid: true, safeFilename: baseName, mimeType: mime };
 }
 
 const requestTimes = new Map();
@@ -240,6 +304,9 @@ const server = http.createServer(async (request, response) => {
 
   // Static files in /uploads/
   if (url.pathname.startsWith('/uploads/')) {
+    if (url.pathname.includes('\0') || url.pathname.includes('..') || url.pathname.includes('\\')) {
+      return send(response, 404, { message: 'File not found.' });
+    }
     const filename = path.basename(url.pathname);
     const uploadsDir = path.resolve('uploads');
     const filePath = path.resolve(uploadsDir, filename);
@@ -309,10 +376,20 @@ const server = http.createServer(async (request, response) => {
         if (!nonce || !isNonceValid || !message.includes(`Nonce: ${nonce}`)) {
           return send(response, 400, { error: { code: 'INVALID_NONCE', message: 'Invalid or expired SIWE nonce.' } });
         }
+        const reqHost = request.headers.host || '127.0.0.1:8787';
+        const configuredDomains = (process.env.ALLOWED_DOMAINS || '')
+          .split(',')
+          .map((d) => d.trim().replace(/^https?:\/\//, ''))
+          .filter(Boolean);
+        const allowedDomains = configuredDomains.length > 0
+          ? configuredDomains
+          : [reqHost, '127.0.0.1:8787', 'localhost:8787', '127.0.0.1:4173', 'localhost:4173', '127.0.0.1', 'localhost'];
+
         const validation = validateSiweMessage(message, {
           expectedAddress: address,
           expectedNonce: nonce,
           expectedChainId: activeChainId,
+          allowedDomains,
         });
         if (!validation.valid) {
           return send(response, 400, { error: { code: 'INVALID_SIWE_MESSAGE', message: validation.reason } });
@@ -728,6 +805,7 @@ const server = http.createServer(async (request, response) => {
           metadataUri: v.metadataUri,
           artist: v.artist,
           nonce: v.nonce,
+          deadline: v.deadline || '0',
           signature: v.signature,
           title: v.title,
           imageUrl: v.imageUrl,
@@ -756,6 +834,7 @@ const server = http.createServer(async (request, response) => {
         metadataUri,
         artist,
         nonce,
+        deadline = '0',
         signature,
         title,
         imageUrl,
@@ -783,6 +862,7 @@ const server = http.createServer(async (request, response) => {
           metadataUri: metadataUri || '',
           artist: artist.toLowerCase(),
           nonce: nonce.toString(),
+          deadline: (deadline || '0').toString(),
           signature,
           title: title || null,
           imageUrl: imageUrl || null,
@@ -792,6 +872,7 @@ const server = http.createServer(async (request, response) => {
         update: {
           minPriceWei: minPriceWei.toString(),
           metadataUri: metadataUri || '',
+          deadline: (deadline || '0').toString(),
           signature,
           title: title || null,
           imageUrl: imageUrl || null,
@@ -918,9 +999,13 @@ const server = http.createServer(async (request, response) => {
 
           const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/i, '');
           const buffer = Buffer.from(base64Data, 'base64');
-          const safeFilename = path.basename(filename || 'artwork.png');
+          const fileValidation = validateFileContentAndSignature(buffer, mimeType, filename || 'artwork.png');
 
-          const uploadResult = await storage.put(buffer, safeFilename, mimeType);
+          if (!fileValidation.valid) {
+            return send(response, 400, { message: fileValidation.reason });
+          }
+
+          const uploadResult = await storage.put(buffer, fileValidation.safeFilename, fileValidation.mimeType);
           imageUrl = uploadResult.publicUrl;
           imageUri = uploadResult.uri;
         }

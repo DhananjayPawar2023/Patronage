@@ -40,38 +40,34 @@ export async function generateNonce() {
 }
 
 /**
- * Validate and consume a generated nonce (strictly single-use, prevents replay attacks)
+ * Validate and consume a generated nonce (strictly single-use, prevents replay attacks).
+ * Atomically deletes from SiweNonce table where nonce matches and expiresAt > NOW().
+ * Exactly 1 request succeeds in concurrent execution; all others fail.
  */
 export async function consumeNonce(nonce) {
   if (!nonce || typeof nonce !== 'string') return false;
 
-  // 1. Check in-memory cache
+  if (prisma) {
+    try {
+      const nowIso = new Date().toISOString();
+      const affected = await prisma.$executeRaw`
+        DELETE FROM "SiweNonce"
+        WHERE "nonce" = ${nonce}
+        AND "expiresAt" > ${nowIso};
+      `;
+      nonceCache.delete(nonce);
+      return affected === 1;
+    } catch (err) {
+      console.error('[siwe] consumeNonce DB error:', err.message);
+      return false;
+    }
+  }
+
+  // In-memory fallback if database client is not initialized
   if (nonceCache.has(nonce)) {
     const expiry = nonceCache.get(nonce);
     nonceCache.delete(nonce);
-    if (Date.now() > expiry) return false;
-
-    if (prisma) {
-      prisma.$executeRaw`DELETE FROM "SiweNonce" WHERE "nonce" = ${nonce};`.catch(() => {});
-    }
-    return true;
-  }
-
-  // 2. Fallback to database
-  if (prisma) {
-    try {
-      const records = await prisma.$queryRaw`
-        SELECT "expiresAt" FROM "SiweNonce" WHERE "nonce" = ${nonce} LIMIT 1;
-      `;
-      if (records && records.length > 0) {
-        const row = records[0];
-        await prisma.$executeRaw`DELETE FROM "SiweNonce" WHERE "nonce" = ${nonce};`;
-        const expiryTime = new Date(row.expiresAt).getTime();
-        return Date.now() <= expiryTime;
-      }
-    } catch (err) {
-      return false;
-    }
+    return Date.now() <= expiry;
   }
 
   return false;
@@ -194,8 +190,19 @@ export async function pruneExpiredSessionsAndNonces() {
 /**
  * Format a standard EIP-4361 SIWE message string
  */
-export function createSiweMessage({ domain, address, statement, uri, version = '1', chainId = 31337, nonce, issuedAt }) {
-  return `${domain} wants you to sign in with your Ethereum account:
+export function createSiweMessage({
+  domain,
+  address,
+  statement = 'Sign in to Patronage.',
+  uri,
+  version = '1',
+  chainId = 31337,
+  nonce,
+  issuedAt = new Date().toISOString(),
+  expirationTime,
+  notBefore,
+}) {
+  let msg = `${domain} wants you to sign in with your Ethereum account:
 ${address}
 
 ${statement}
@@ -205,15 +212,23 @@ Version: ${version}
 Chain ID: ${chainId}
 Nonce: ${nonce}
 Issued At: ${issuedAt}`;
+
+  if (expirationTime) {
+    msg += `\nExpiration Time: ${expirationTime}`;
+  }
+  if (notBefore) {
+    msg += `\nNot Before: ${notBefore}`;
+  }
+  return msg;
 }
 
 /**
  * Validate EIP-4361 Message fields against server policy
  */
-export function validateSiweMessage(message, { expectedAddress, expectedNonce, expectedChainId, allowedDomains = [] }) {
+export function validateSiweMessage(message, { expectedAddress, expectedNonce, expectedChainId, expectedUri, allowedDomains = [] } = {}) {
   if (!message || typeof message !== 'string') return { valid: false, reason: 'Empty message' };
 
-  // Parse fields
+  // Parse header
   const addressMatch = message.match(/^([^\n]+) wants you to sign in with your Ethereum account:\n(0x[a-fA-F0-9]{40})/m);
   if (!addressMatch) return { valid: false, reason: 'Invalid header format' };
 
@@ -225,9 +240,16 @@ export function validateSiweMessage(message, { expectedAddress, expectedNonce, e
   const chainIdMatch = message.match(/Chain ID:\s*(\d+)/);
   const nonceMatch = message.match(/Nonce:\s*(\S+)/);
   const issuedAtMatch = message.match(/Issued At:\s*(\S+)/);
+  const expirationMatch = message.match(/Expiration Time:\s*(\S+)/);
+  const notBeforeMatch = message.match(/Not Before:\s*(\S+)/);
 
   if (!uriMatch || !versionMatch || !chainIdMatch || !nonceMatch || !issuedAtMatch) {
     return { valid: false, reason: 'Missing mandatory EIP-4361 fields' };
+  }
+
+  const version = versionMatch[1];
+  if (version !== '1') {
+    return { valid: false, reason: `Unsupported SIWE version: ${version} (expected 1)` };
   }
 
   if (expectedAddress && address !== expectedAddress.toLowerCase()) {
@@ -242,18 +264,54 @@ export function validateSiweMessage(message, { expectedAddress, expectedNonce, e
     return { valid: false, reason: `Chain ID mismatch (got ${chainIdMatch[1]}, expected ${expectedChainId})` };
   }
 
-  if (allowedDomains.length > 0 && !allowedDomains.includes(domain)) {
-    return { valid: false, reason: `Unauthorized domain ${domain}` };
+  if (expectedUri && uriMatch[1] !== expectedUri) {
+    return { valid: false, reason: `URI mismatch (got ${uriMatch[1]}, expected ${expectedUri})` };
   }
+
+  if (allowedDomains && allowedDomains.length > 0) {
+    const isDomainAllowed = allowedDomains.some((d) => {
+      const cleanD = d.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const cleanDomain = domain.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+      return cleanDomain === cleanD;
+    });
+    if (!isDomainAllowed) {
+      return { valid: false, reason: `Unauthorized domain ${domain}` };
+    }
+  }
+
+  const now = Date.now();
 
   // Check issuedAt timestamp freshness (must not be in future > 1m or past > 10m)
   const issuedTime = new Date(issuedAtMatch[1]).getTime();
   if (isNaN(issuedTime)) return { valid: false, reason: 'Invalid Issued At timestamp' };
-  const now = Date.now();
-  if (issuedTime > now + 60_000) return { valid: false, reason: 'Issued At timestamp is in the future' };
+  if (issuedTime > now + 60_000) return { valid: false, reason: 'Issued At timestamp is excessively future-dated' };
   if (now - issuedTime > 10 * 60_000) return { valid: false, reason: 'SIWE message expired (issued > 10m ago)' };
 
-  return { valid: true, domain, address, chainId: Number(chainIdMatch[1]), nonce: nonceMatch[1] };
+  // Check expirationTime if specified
+  if (expirationMatch) {
+    const expTime = new Date(expirationMatch[1]).getTime();
+    if (isNaN(expTime)) return { valid: false, reason: 'Invalid Expiration Time timestamp' };
+    if (now >= expTime) return { valid: false, reason: 'SIWE message has expired' };
+  }
+
+  // Check notBefore if specified
+  if (notBeforeMatch) {
+    const nbTime = new Date(notBeforeMatch[1]).getTime();
+    if (isNaN(nbTime)) return { valid: false, reason: 'Invalid Not Before timestamp' };
+    if (now < nbTime) return { valid: false, reason: 'SIWE message is not yet valid (notBefore in future)' };
+  }
+
+  return {
+    valid: true,
+    domain,
+    address,
+    uri: uriMatch[1],
+    chainId: Number(chainIdMatch[1]),
+    nonce: nonceMatch[1],
+    issuedAt: issuedAtMatch[1],
+    expirationTime: expirationMatch ? expirationMatch[1] : undefined,
+    notBefore: notBeforeMatch ? notBeforeMatch[1] : undefined,
+  };
 }
 
 /**

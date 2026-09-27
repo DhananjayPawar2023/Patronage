@@ -1,10 +1,10 @@
 {
   "chainId": 31337,
   "rpcUrl": "http://127.0.0.1:8545",
-  "deploymentBlock": "597",
+  "deploymentBlock": "0",
   "contracts": {
     "Treasury": {
-      "address": "0x33e45b187da34826abceda1039231be46f1b05af",
+      "address": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
       "abi": [
         {
           "inputs": [
@@ -304,7 +304,7 @@
       ]
     },
     "AuctionHouse": {
-      "address": "0x0c626fc4a447b01554518550e30600136864640b",
+      "address": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512",
       "abi": [
         {
           "inputs": [
@@ -1648,7 +1648,7 @@
       ]
     },
     "PatronEdition": {
-      "address": "0xa21ddc1f17df41589bc6a5209292aed2df61cc94",
+      "address": "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0",
       "abi": [
         {
           "inputs": [
@@ -2474,7 +2474,7 @@
       ]
     },
     "ArtistFactory": {
-      "address": "0x2a590c461db46bca129e8dbe5c3998a8ff402e76",
+      "address": "0xcf7ed3acca5a467e9e704c703e8d87f634fb0fc9",
       "abi": [
         {
           "inputs": [
@@ -2684,7 +2684,7 @@
       ]
     },
     "PlatformRegistry": {
-      "address": "0x158d291d8b47f056751cff47d1eecd19fdf9b6f8",
+      "address": "0xdc64a140aa3e981100a9beca4e685f962f0cf6c9",
       "abi": [
         {
           "inputs": [
@@ -3050,7 +3050,7 @@
       ]
     },
     "ArtworkNFT": {
-      "address": "0x1b7f3E12C776D317801793120894720A7AB838f5",
+      "address": "0xd8058efe0198ae9dD7D563e1b4938Dcbc86A1F81",
       "abi": [
         {
           "inputs": [],
@@ -3305,6 +3305,11 @@
         {
           "inputs": [],
           "name": "VoucherAlreadyRedeemed",
+          "type": "error"
+        },
+        {
+          "inputs": [],
+          "name": "VoucherExpired",
           "type": "error"
         },
         {
@@ -3741,6 +3746,11 @@
                   "internalType": "uint256",
                   "name": "nonce",
                   "type": "uint256"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "deadline",
+                  "type": "uint256"
                 }
               ],
               "internalType": "struct ArtworkNFT.NFTVoucher",
@@ -3885,6 +3895,11 @@
                 {
                   "internalType": "uint256",
                   "name": "nonce",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "deadline",
                   "type": "uint256"
                 }
               ],

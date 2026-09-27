@@ -159,6 +159,7 @@ model LazyVoucher {
   metadataUri String
   artist      String
   nonce       String
+  deadline    String   @default("0")
   signature   String
   title       String?
   imageUrl    String?

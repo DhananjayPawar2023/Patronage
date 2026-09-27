@@ -73,7 +73,7 @@ async function main() {
   const account = privateKeyToAccount('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80');
   const nonceRes = await get(`${API_BASE}/api/siwe/nonce`);
   const nonce = nonceRes.data?.nonce;
-  const message = createSiweMessage({ address: account.address, chainId: 31337, nonce, uri: API_BASE });
+  const message = createSiweMessage({ domain: '127.0.0.1:8787', address: account.address, chainId: 31337, nonce, uri: API_BASE });
   const signature = await account.signMessage({ message });
   const verifyRes = await post(`${API_BASE}/api/siwe/verify`, { address: account.address, message, signature, nonce });
   const sessionToken = verifyRes.data?.session?.token;

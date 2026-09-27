@@ -12,7 +12,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 contract ArtworkNFT is ERC721URIStorage, ERC2981, AccessControl {
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 private constant EIP712_DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-    bytes32 public constant VOUCHER_TYPEHASH = keccak256("NFTVoucher(address nft,uint256 tokenId,uint256 minPrice,string uri,address artist,uint256 nonce)");
+    bytes32 public constant VOUCHER_TYPEHASH = keccak256("NFTVoucher(address nft,uint256 tokenId,uint256 minPrice,string uri,address artist,uint256 nonce,uint256 deadline)");
 
     struct NFTVoucher {
         address nft;
@@ -21,6 +21,7 @@ contract ArtworkNFT is ERC721URIStorage, ERC2981, AccessControl {
         string uri;
         address artist;
         uint256 nonce;
+        uint256 deadline;
     }
 
     uint256 public nextTokenId = 1;
@@ -38,10 +39,14 @@ contract ArtworkNFT is ERC721URIStorage, ERC2981, AccessControl {
     error VoucherAlreadyRedeemed();
     error InvalidSignature();
     error PaymentFailed();
+    error VoucherExpired();
 
     event VoucherRedeemed(address indexed nft, uint256 indexed tokenId, address indexed artist, address collector, uint256 price);
 
-    constructor() ERC721("Patronage Artwork", "PATRON") {}
+    constructor() ERC721("Patronage Artwork", "PATRON") {
+        // Prevent direct initialization of the base implementation contract
+        initialized = true;
+    }
 
     /// @notice Initializes a minimal-proxy clone exactly once.
     function initialize(
@@ -87,13 +92,15 @@ contract ArtworkNFT is ERC721URIStorage, ERC2981, AccessControl {
             voucher.minPrice,
             keccak256(bytes(voucher.uri)),
             voucher.artist,
-            voucher.nonce
+            voucher.nonce,
+            voucher.deadline
         ));
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator(), structHash));
     }
 
     /// @notice Redeems an artist's signed voucher: collector pays price + gas, token is minted to collector
     function mintWithVoucher(NFTVoucher calldata voucher, bytes calldata signature) external payable returns (uint256 tokenId) {
+        if (voucher.deadline == 0 || block.timestamp > voucher.deadline) revert VoucherExpired();
         if (voucher.nft != address(this)) revert InvalidVoucher();
         if (voucher.artist != creator) revert InvalidVoucher();
         if (msg.value < voucher.minPrice) revert InsufficientPayment();

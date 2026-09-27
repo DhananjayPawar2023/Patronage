@@ -129,22 +129,36 @@ async function main() {
   const metadataUri = uploadData.data?.metadataUri;
   console.log(`✔ Artwork and metadata successfully persisted (Metadata URI: ${metadataUri})`);
 
-  // Step 11: Real NFT minting on Anvil
+  // Step 11: Real NFT minting on Anvil via ArtistFactory clone
   console.log('\n▶ [11/25] Minting real 1/1 NFT on Anvil...');
   const artworkArtifact = JSON.parse(fs.readFileSync(path.resolve('contracts/artifacts/ArtworkNFT.json'), 'utf8'));
-  const cloneHash = await wallets[0].deployContract({
-    abi: artworkArtifact.abi,
-    bytecode: artworkArtifact.bytecode,
+  let collectionAddress = await publicClient.readContract({
+    address: ArtistFactory.address,
+    abi: ArtistFactory.abi,
+    functionName: 'collectionOf',
+    args: [accounts[0].address],
   });
-  const cloneRec = await publicClient.waitForTransactionReceipt({ hash: cloneHash });
-  const collectionAddress = cloneRec.contractAddress;
-  await tx(wallets[0], {
+
+  if (!collectionAddress || collectionAddress === '0x0000000000000000000000000000000000000000') {
+    await tx(wallets[0], {
+      address: ArtistFactory.address,
+      abi: ArtistFactory.abi,
+      functionName: 'createCollection',
+      args: ['Master Acceptance Collection', 'MAC'],
+    });
+    collectionAddress = await publicClient.readContract({
+      address: ArtistFactory.address,
+      abi: ArtistFactory.abi,
+      functionName: 'collectionOf',
+      args: [accounts[0].address],
+    });
+  }
+
+  const tokenId = await publicClient.readContract({
     address: collectionAddress,
     abi: artworkArtifact.abi,
-    functionName: 'initialize',
-    args: ['Master Acceptance Collection', 'MAC', accounts[0].address, AuctionHouse.address, accounts[0].address, 500],
+    functionName: 'nextTokenId',
   });
-  const tokenId = 1n;
   await tx(wallets[0], {
     address: collectionAddress,
     abi: artworkArtifact.abi,

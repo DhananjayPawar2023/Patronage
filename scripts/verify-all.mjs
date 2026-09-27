@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 
 const steps = [
   { name: '1. Compile Solidity Contracts', cmd: 'node scripts/compile-contracts.mjs' },
-  { name: '2. Run Foundry Test Suite (30/30 + 128k Fuzz)', cmd: 'tools\\foundry\\forge.exe test --root contracts' },
+  { name: '2. Run Foundry Test Suite (43/43 + 128k Fuzz + Invariants)', cmd: 'tools\\foundry\\forge.exe test --root contracts' },
   { name: '3. Full Repository Anvil Key & Mnemonic Audit', cmd: 'node scripts/verify-backend-and-full-repo.mjs' },
   { name: '4. RBAC Authorization & Durable Session Persistence', cmd: 'node scripts/test-rbac-and-durable-auth.mjs' },
   { name: '5. Sync Live OFAC SDN Sanctions Feed (124+ Addresses)', cmd: 'node scripts/sync-sanctions.mjs' },
@@ -13,12 +13,15 @@ const steps = [
   { name: '10. Frontend Production Build & Bundle Audit', cmd: 'npm run build' },
   { name: '11. Audit dist/ for Keys and Sourcemaps', cmd: 'node scripts/verify-exhaustive-keys.mjs' },
   { name: '12. SIWE Session & Nonce Periodic Maintenance Pruner', cmd: 'node scripts/test-session-pruning.mjs' },
-  { name: '13. 25-Step Master End-to-End Acceptance Flow', cmd: 'node scripts/test-master-acceptance-flow.mjs' },
-  { name: '14. True Chain-Level Reorg via evm_snapshot/revert', cmd: 'node scripts/test-real-chain-reorg.mjs' },
-  { name: '15. Indexer Process Kill/Restart Durability', cmd: 'node scripts/test-indexer-kill-restart.mjs' },
-  { name: '16. Vendored Indexer Durable SQLite Storage & Checkpoint', cmd: 'node scripts/test-vendored-indexer-durability.mjs' },
-  { name: '17. PostgreSQL Schema & Raw SQL Dialect Portability', cmd: 'node scripts/test-postgresql-compatibility.mjs' },
-  { name: '18. EIP-712 Gasless Lazy Minting & On-Chain Escrowed Offers Flow', cmd: 'node scripts/test-offers-and-lazymint-flow.mjs' },
+  { name: '13. P0 SIWE Nonce Concurrency & Validation Security', cmd: 'node scripts/test-siwe-concurrency.mjs' },
+  { name: '14. P1 Storage & File Upload Traversal/Magic-Bytes Security', cmd: 'node scripts/test-upload-security.mjs' },
+  { name: '15. P1 API Authorization & Security Headers', cmd: 'node scripts/test-api-security.mjs' },
+  { name: '16. 25-Step Master End-to-End Acceptance Flow', cmd: 'node scripts/test-master-acceptance-flow.mjs' },
+  { name: '17. True Chain-Level Reorg via evm_snapshot/revert', cmd: 'node scripts/test-real-chain-reorg.mjs' },
+  { name: '18. Indexer Process Kill/Restart Durability', cmd: 'node scripts/test-indexer-kill-restart.mjs' },
+  { name: '19. Vendored Indexer Durable SQLite Storage & Checkpoint', cmd: 'node scripts/test-vendored-indexer-durability.mjs' },
+  { name: '20. PostgreSQL Schema & Raw SQL Dialect Portability', cmd: 'node scripts/test-postgresql-compatibility.mjs' },
+  { name: '21. EIP-712 Gasless Lazy Minting & On-Chain Escrowed Offers Flow', cmd: 'node scripts/test-offers-and-lazymint-flow.mjs' },
 ];
 
 console.log('================================================================');

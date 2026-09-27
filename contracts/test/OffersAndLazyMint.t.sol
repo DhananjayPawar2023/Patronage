@@ -5,9 +5,11 @@ import {Test} from "forge-std/Test.sol";
 import {AuctionHouse} from "../src/AuctionHouse.sol";
 import {ArtworkNFT} from "../src/ArtworkNFT.sol";
 import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 
 contract OffersAndLazyMintTest is Test, IERC721Receiver {
     AuctionHouse internal auction;
+    ArtworkNFT internal impl;
     ArtworkNFT internal nft;
 
     address payable internal treasury = payable(address(0xBEEF));
@@ -30,7 +32,8 @@ contract OffersAndLazyMintTest is Test, IERC721Receiver {
         artist = vm.addr(artistPk);
         auction = new AuctionHouse(treasury, PROTOCOL_FEE, ANTI_SNIPE);
 
-        nft = new ArtworkNFT();
+        impl = new ArtworkNFT();
+        nft = ArtworkNFT(Clones.clone(address(impl)));
         nft.initialize(
             "Patron Art",
             "PATRON",
@@ -201,7 +204,8 @@ contract OffersAndLazyMintTest is Test, IERC721Receiver {
             minPrice: 0.25 ether,
             uri: "ipfs://bafybeilazymint10",
             artist: artist,
-            nonce: 1001
+            nonce: 1001,
+            deadline: block.timestamp + 1 hours
         });
 
         bytes32 digest = nft.hashVoucher(voucher);
@@ -225,6 +229,110 @@ contract OffersAndLazyMintTest is Test, IERC721Receiver {
         nft.mintWithVoucher{value: 0.25 ether}(voucher, signature);
     }
 
+    function test_ExpiredVoucherReverts() public {
+        ArtworkNFT.NFTVoucher memory voucher = ArtworkNFT.NFTVoucher({
+            nft: address(nft),
+            tokenId: 15,
+            minPrice: 0.25 ether,
+            uri: "ipfs://bafybeilazymint15",
+            artist: artist,
+            nonce: 1005,
+            deadline: block.timestamp + 100
+        });
+
+        bytes32 digest = nft.hashVoucher(voucher);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(artistPk, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        // Warp time past deadline
+        vm.warp(block.timestamp + 101);
+
+        vm.expectRevert(ArtworkNFT.VoucherExpired.selector);
+        vm.prank(buyer);
+        nft.mintWithVoucher{value: 0.25 ether}(voucher, signature);
+    }
+
+    function test_ZeroDeadlineVoucherReverts() public {
+        ArtworkNFT.NFTVoucher memory voucher = ArtworkNFT.NFTVoucher({
+            nft: address(nft),
+            tokenId: 16,
+            minPrice: 0.25 ether,
+            uri: "ipfs://bafybeilazymint16",
+            artist: artist,
+            nonce: 1006,
+            deadline: 0
+        });
+
+        bytes32 digest = nft.hashVoucher(voucher);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(artistPk, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.expectRevert(ArtworkNFT.VoucherExpired.selector);
+        vm.prank(buyer);
+        nft.mintWithVoucher{value: 0.25 ether}(voucher, signature);
+    }
+
+    function test_VoucherWrongSignerReverts() public {
+        ArtworkNFT.NFTVoucher memory voucher = ArtworkNFT.NFTVoucher({
+            nft: address(nft),
+            tokenId: 17,
+            minPrice: 0.25 ether,
+            uri: "ipfs://bafybeilazymint17",
+            artist: artist,
+            nonce: 1007,
+            deadline: block.timestamp + 1 hours
+        });
+
+        bytes32 digest = nft.hashVoucher(voucher);
+        // Signed by attacker (outbidder) instead of artist
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(0xDEADBEEF, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.expectRevert(ArtworkNFT.InvalidSignature.selector);
+        vm.prank(buyer);
+        nft.mintWithVoucher{value: 0.25 ether}(voucher, signature);
+    }
+
+    function test_VoucherWrongArtistReverts() public {
+        ArtworkNFT.NFTVoucher memory voucher = ArtworkNFT.NFTVoucher({
+            nft: address(nft),
+            tokenId: 18,
+            minPrice: 0.25 ether,
+            uri: "ipfs://bafybeilazymint18",
+            artist: address(0x9999), // wrong artist (not creator of collection)
+            nonce: 1008,
+            deadline: block.timestamp + 1 hours
+        });
+
+        bytes32 digest = nft.hashVoucher(voucher);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(artistPk, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.expectRevert(ArtworkNFT.InvalidVoucher.selector);
+        vm.prank(buyer);
+        nft.mintWithVoucher{value: 0.25 ether}(voucher, signature);
+    }
+
+    function test_VoucherWrongNftReverts() public {
+        ArtworkNFT.NFTVoucher memory voucher = ArtworkNFT.NFTVoucher({
+            nft: address(0x8888), // wrong nft contract
+            tokenId: 19,
+            minPrice: 0.25 ether,
+            uri: "ipfs://bafybeilazymint19",
+            artist: artist,
+            nonce: 1009,
+            deadline: block.timestamp + 1 hours
+        });
+
+        bytes32 digest = nft.hashVoucher(voucher);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(artistPk, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.expectRevert(ArtworkNFT.InvalidVoucher.selector);
+        vm.prank(buyer);
+        nft.mintWithVoucher{value: 0.25 ether}(voucher, signature);
+    }
+
     function test_LazyMintUnderpricedFails() public {
         ArtworkNFT.NFTVoucher memory voucher = ArtworkNFT.NFTVoucher({
             nft: address(nft),
@@ -232,7 +340,8 @@ contract OffersAndLazyMintTest is Test, IERC721Receiver {
             minPrice: 0.5 ether,
             uri: "ipfs://bafybeilazymint11",
             artist: artist,
-            nonce: 1002
+            nonce: 1002,
+            deadline: block.timestamp + 1 hours
         });
 
         bytes32 digest = nft.hashVoucher(voucher);
@@ -243,5 +352,26 @@ contract OffersAndLazyMintTest is Test, IERC721Receiver {
         vm.expectRevert(ArtworkNFT.InsufficientPayment.selector);
         vm.prank(buyer);
         nft.mintWithVoucher{value: 0.4 ether}(voucher, signature);
+    }
+
+    function test_ImplementationCannotBeInitialized() public {
+        vm.expectRevert(ArtworkNFT.AlreadyInitialized.selector);
+        impl.initialize("Attacker", "ATT", address(0x999), address(auction), address(0x999), 500);
+    }
+
+    function test_CloneCannotBeInitializedTwice() public {
+        vm.expectRevert(ArtworkNFT.AlreadyInitialized.selector);
+        nft.initialize("Second", "SEC", artist, address(auction), artist, 500);
+    }
+
+    function test_CloneRolesAndRoyaltyAssigned() public view {
+        assertTrue(nft.hasRole(nft.DEFAULT_ADMIN_ROLE(), artist));
+        assertTrue(nft.hasRole(nft.MINTER_ROLE(), artist));
+        assertTrue(nft.hasRole(nft.MINTER_ROLE(), address(auction)));
+        assertEq(nft.creator(), artist);
+
+        (address receiver, uint256 royaltyAmount) = nft.royaltyInfo(1, 1 ether);
+        assertEq(receiver, artist);
+        assertEq(royaltyAmount, 0.05 ether); // 500 bps = 5%
     }
 }

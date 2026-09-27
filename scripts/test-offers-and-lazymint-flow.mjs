@@ -93,6 +93,7 @@ async function runTest() {
     chainId: 31337,
     verifyingContract: collectionAddr,
   };
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 86400); // 24 hours
   const types = {
     NFTVoucher: [
       { name: 'nft', type: 'address' },
@@ -101,6 +102,7 @@ async function runTest() {
       { name: 'uri', type: 'string' },
       { name: 'artist', type: 'address' },
       { name: 'nonce', type: 'uint256' },
+      { name: 'deadline', type: 'uint256' },
     ],
   };
   const message = {
@@ -110,6 +112,7 @@ async function runTest() {
     uri: metadataUri,
     artist: artistAccount.address,
     nonce,
+    deadline,
   };
 
   const voucherSignature = await artistAccount.signTypedData({
@@ -135,6 +138,7 @@ async function runTest() {
       metadataUri,
       artist: artistAccount.address,
       nonce: nonce.toString(),
+      deadline: deadline.toString(),
       signature: voucherSignature,
       title: 'Cosmic Singularity (Lazy Mint)',
       imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe',
@@ -152,7 +156,30 @@ async function runTest() {
   if (!foundVoucher) throw new Error('Registered voucher not returned by GET /api/vouchers');
   console.log('✔ Verified voucher listed in active marketplace query');
 
-  // Collector redeems voucher on-chain
+  // Test expired voucher rejection on-chain
+  console.log('  Testing expired voucher rejection...');
+  const expiredDeadline = BigInt(Math.floor(Date.now() / 1000) - 100);
+  const expiredMsg = { ...message, nonce: nonce + 999n, deadline: expiredDeadline };
+  const expiredSig = await artistAccount.signTypedData({
+    domain,
+    types,
+    primaryType: 'NFTVoucher',
+    message: expiredMsg,
+  });
+  try {
+    await collectorWallet.writeContract({
+      address: collectionAddr,
+      abi: ArtworkNFT.abi,
+      functionName: 'mintWithVoucher',
+      args: [{ ...expiredMsg }, expiredSig],
+      value: minPriceWei,
+    });
+    throw new Error('SECURITY VIOLATION: Expired voucher was accepted!');
+  } catch (err) {
+    console.log('  ✔ Expired voucher correctly rejected by smart contract');
+  }
+
+  // Collector redeems valid voucher on-chain
   console.log('\n3. Collector redeems voucher on-chain via mintWithVoucher()...');
   const artistPreBal = await publicClient.getBalance({ address: artistAccount.address });
   const mintedTokenId = await publicClient.readContract({
@@ -168,6 +195,7 @@ async function runTest() {
     uri: metadataUri,
     artist: artistAccount.address,
     nonce,
+    deadline,
   };
 
   const redeemTx = await collectorWallet.writeContract({

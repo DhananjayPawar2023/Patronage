@@ -6,9 +6,11 @@ import {AuctionHouse} from "../src/AuctionHouse.sol";
 import {ArtworkNFT} from "../src/ArtworkNFT.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 
 contract TimelockAndPauseTest is Test {
     AuctionHouse internal auction;
+    ArtworkNFT internal impl;
     ArtworkNFT internal nft;
     TimelockController internal timelock;
 
@@ -44,7 +46,8 @@ contract TimelockAndPauseTest is Test {
         auction.renounceRole(auction.OPERATOR_ROLE(), address(this));
 
         // 6. Setup NFT and create lot
-        nft = new ArtworkNFT();
+        impl = new ArtworkNFT();
+        nft = ArtworkNFT(Clones.clone(address(impl)));
         nft.initialize("Patron Art", "ART", seller, address(this), seller, 500);
 
         vm.startPrank(seller);
