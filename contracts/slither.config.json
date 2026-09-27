@@ -1,5 +1,5 @@
 {
-  "filter_paths": "contracts/lib|contracts/test|lib|test",
+  "filter_paths": "lib|test",
   "fail_on": "none",
   "exclude_informational": true,
   "exclude_low": true,
