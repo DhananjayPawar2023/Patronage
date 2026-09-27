@@ -9,7 +9,7 @@
     "dev:chain": "node scripts/local-chain.mjs",
     "compile": "node scripts/compile-contracts.mjs",
     "contracts:test": "node scripts/forge.mjs test --root contracts",
-    "contracts:coverage": "node scripts/forge.mjs coverage --root contracts",
+    "contracts:coverage": "node scripts/forge.mjs coverage --root contracts --ir-minimum",
     "test:local-vertical": "node scripts/test-local-vertical-slice.mjs",
     "test:api-security": "node scripts/test-api-security.mjs",
     "test:siwe-runtime": "node scripts/test-siwe-runtime.mjs",
@@ -36,6 +36,7 @@
   "devDependencies": {
     "@openzeppelin/contracts": "5.2.0",
     "ganache": "^7.9.2",
-    "solc": "0.8.24"
+    "solc": "0.8.24",
+    "solhint": "^5.0.5"
   }
 }

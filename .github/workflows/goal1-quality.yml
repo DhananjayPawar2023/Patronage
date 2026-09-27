@@ -12,9 +12,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
       - uses: foundry-rs/foundry-toolchain@v1
-      - run: npm ci
+      - run: npm install
       - run: npm run contracts:test
       - run: npm run contracts:coverage
       - run: pip install slither-analyzer solc-select
