@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 
 const steps = [
   { name: '1. Compile Solidity Contracts', cmd: 'node scripts/compile-contracts.mjs' },
-  { name: '2. Run Foundry Test Suite (43/43 + 128k Fuzz + Invariants)', cmd: 'tools\\foundry\\forge.exe test --root contracts' },
+  { name: '2. Run Foundry Test Suite (58/58 + 128k Fuzz + Invariants)', cmd: 'node scripts/forge.mjs test' },
   { name: '3. Full Repository Anvil Key & Mnemonic Audit', cmd: 'node scripts/verify-backend-and-full-repo.mjs' },
   { name: '4. RBAC Authorization & Durable Session Persistence', cmd: 'node scripts/test-rbac-and-durable-auth.mjs' },
   { name: '5. Sync Live OFAC SDN Sanctions Feed (124+ Addresses)', cmd: 'node scripts/sync-sanctions.mjs' },
@@ -22,6 +22,11 @@ const steps = [
   { name: '19. Vendored Indexer Durable SQLite Storage & Checkpoint', cmd: 'node scripts/test-vendored-indexer-durability.mjs' },
   { name: '20. PostgreSQL Schema & Raw SQL Dialect Portability', cmd: 'node scripts/test-postgresql-compatibility.mjs' },
   { name: '21. EIP-712 Gasless Lazy Minting & On-Chain Escrowed Offers Flow', cmd: 'node scripts/test-offers-and-lazymint-flow.mjs' },
+  { name: '22. Red-Team SIWE & Concurrency Attack Suite', cmd: 'node scripts/redteam/redteam-siwe.mjs' },
+  { name: '23. Red-Team Storage & File Upload Attack Suite', cmd: 'node scripts/redteam/redteam-storage.mjs' },
+  { name: '24. Red-Team EIP-712 Voucher & Lazy Mint Attack Suite', cmd: 'node scripts/redteam/redteam-vouchers.mjs' },
+  { name: '25. Red-Team API RBAC & Boundary Attack Suite', cmd: 'node scripts/redteam/redteam-api.mjs' },
+  { name: '26. Red-Team Indexer Resilience & Reorg Attack Suite', cmd: 'node scripts/redteam/redteam-indexer.mjs' },
 ];
 
 console.log('================================================================');
@@ -38,7 +43,9 @@ for (const step of steps) {
   } catch (err) {
     console.log('✖ FAILED');
     console.error(`\nCommand: ${step.cmd}`);
-    console.error(err.stdout || err.stderr || err.message);
+    if (err.stdout) console.log(err.stdout);
+    if (err.stderr) console.error(err.stderr);
+    if (!err.stdout && !err.stderr) console.error(err.message);
     process.exit(1);
   }
 }

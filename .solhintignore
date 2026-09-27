@@ -1,0 +1,3 @@
+contracts/lib/**
+lib/**
+node_modules/**

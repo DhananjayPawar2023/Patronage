@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import '../src/config/load-env.mjs';
 import { PrismaClient } from '@prisma/client';
-import { formatEther } from 'viem';
+import { formatEther, recoverTypedDataAddress } from 'viem';
 import { createStorageProvider } from '../src/providers/storage.mjs';
 import { createPublicClient, http as viemHttp } from 'viem';
 import { mainnet, sepolia, base, baseSepolia, foundry } from 'viem/chains';
@@ -149,10 +149,11 @@ function validateFileContentAndSignature(buffer, declaredMime, rawFilename) {
 
 const requestTimes = new Map();
 function rateLimit(request, response) {
+  if (process.env.NODE_ENV === 'test' || process.env.DISABLE_RATE_LIMIT === 'true') return true;
   const key = request.socket.remoteAddress || 'unknown';
   const now = Date.now();
   const recent = (requestTimes.get(key) || []).filter((time) => now - time < 60_000);
-  if (recent.length >= 120) { send(response, 429, { error: { code: 'RATE_LIMITED', message: 'Too many requests.' } }); return false; }
+  if (recent.length >= 600) { send(response, 429, { error: { code: 'RATE_LIMITED', message: 'Too many requests.' } }); return false; }
   recent.push(now); requestTimes.set(key, recent); return true;
 }
 
@@ -376,14 +377,13 @@ const server = http.createServer(async (request, response) => {
         if (!nonce || !isNonceValid || !message.includes(`Nonce: ${nonce}`)) {
           return send(response, 400, { error: { code: 'INVALID_NONCE', message: 'Invalid or expired SIWE nonce.' } });
         }
-        const reqHost = request.headers.host || '127.0.0.1:8787';
         const configuredDomains = (process.env.ALLOWED_DOMAINS || '')
           .split(',')
           .map((d) => d.trim().replace(/^https?:\/\//, ''))
           .filter(Boolean);
         const allowedDomains = configuredDomains.length > 0
           ? configuredDomains
-          : [reqHost, '127.0.0.1:8787', 'localhost:8787', '127.0.0.1:4173', 'localhost:4173', '127.0.0.1', 'localhost'];
+          : ['127.0.0.1:8787', 'localhost:8787', '127.0.0.1:4173', 'localhost:4173', '127.0.0.1', 'localhost'];
 
         const validation = validateSiweMessage(message, {
           expectedAddress: address,
@@ -568,18 +568,18 @@ const server = http.createServer(async (request, response) => {
       const [artist, lots, bidsPlaced, notifications] = await Promise.all([
         prisma.artist.findUnique({ where: { walletAddress: address } }),
         prisma.lot.findMany({
-          where: { creator: { equals: address, mode: 'insensitive' } },
+          where: { creator: address },
           include: { bids: { orderBy: { timestamp: 'desc' }, take: 1 } },
           orderBy: { createdAt: 'desc' },
         }),
         prisma.bid.findMany({
-          where: { bidder: { equals: address, mode: 'insensitive' } },
+          where: { bidder: address },
           orderBy: { timestamp: 'desc' },
           take: 20,
           include: { lot: { select: { title: true, imageUrl: true, status: true, lotId: true } } },
         }),
         prisma.notification.findMany({
-          where: { wallet: { equals: address, mode: 'insensitive' } },
+          where: { wallet: address },
           orderBy: { createdAt: 'desc' },
           take: 20,
         }),
@@ -615,16 +615,18 @@ const server = http.createServer(async (request, response) => {
     if (await rejectUnauthorized(request, response)) return;
     const sess = await sessionFromRequest(request);
     try {
-      const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
-      const limit = Math.min(50, parseInt(url.searchParams.get('limit') || '20', 10));
+      const rawPage = parseInt(url.searchParams.get('page') || '1', 10);
+      const rawLimit = parseInt(url.searchParams.get('limit') || '20', 10);
+      const page = Math.max(1, isNaN(rawPage) ? 1 : rawPage);
+      const limit = Math.max(1, Math.min(50, isNaN(rawLimit) ? 20 : rawLimit));
       const notifications = await prisma.notification.findMany({
-        where: { wallet: { equals: sess.address, mode: 'insensitive' } },
+        where: { wallet: sess.address.toLowerCase() },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       });
       const total = await prisma.notification.count({
-        where: { wallet: { equals: sess.address, mode: 'insensitive' } },
+        where: { wallet: sess.address.toLowerCase() },
       });
       return send(response, 200, {
         data: notifications.map((n) => ({ id: n.id, type: n.type, payload: JSON.parse(n.payload || '{}'), createdAt: n.createdAt })),
@@ -824,12 +826,14 @@ const server = http.createServer(async (request, response) => {
 
   // POST Lazy Mint Voucher
   if (request.method === 'POST' && url.pathname === '/api/vouchers') {
+    if (await rejectUnauthorized(request, response)) return;
+    const sess = await sessionFromRequest(request);
     try {
       const payload = await readJson(request);
       const {
         chainId: voucherChainId = activeChainId,
         nftAddress,
-        tokenId,
+        tokenId = '0',
         minPriceWei,
         metadataUri,
         artist,
@@ -841,8 +845,67 @@ const server = http.createServer(async (request, response) => {
         artistName,
       } = payload;
 
-      if (!nftAddress || !artist || !signature || !minPriceWei) {
+      if (!nftAddress || !artist || !signature || !minPriceWei || nonce === undefined) {
         return send(response, 400, { error: { code: 'BAD_REQUEST', message: 'Missing required voucher parameters.' } });
+      }
+
+      if (!/^0x[a-fA-F0-9]{40}$/.test(nftAddress) || !/^0x[a-fA-F0-9]{40}$/.test(artist)) {
+        return send(response, 400, { error: { code: 'INVALID_ADDRESS', message: 'Invalid contract or artist Ethereum address.' } });
+      }
+
+      const role = getSessionRole(sess.address);
+      if (sess.address.toLowerCase() !== artist.toLowerCase() && role !== 'admin') {
+        return send(response, 403, { error: { code: 'FORBIDDEN', message: 'Voucher artist must match authenticated session.' } });
+      }
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const deadlineNum = Number(deadline);
+      if (isNaN(deadlineNum) || deadlineNum <= 0) {
+        return send(response, 400, { error: { code: 'INVALID_DEADLINE', message: 'Voucher deadline must be a positive unix timestamp.' } });
+      }
+      if (deadlineNum <= nowSec) {
+        return send(response, 400, { error: { code: 'VOUCHER_EXPIRED', message: 'Voucher deadline has already expired.' } });
+      }
+
+      // Cryptographically verify EIP-712 signature
+      let recoveredSigner;
+      try {
+        recoveredSigner = await recoverTypedDataAddress({
+          domain: {
+            name: 'PatronageArtwork',
+            version: '1',
+            chainId: Number(voucherChainId),
+            verifyingContract: nftAddress,
+          },
+          types: {
+            NFTVoucher: [
+              { name: 'nft', type: 'address' },
+              { name: 'tokenId', type: 'uint256' },
+              { name: 'minPrice', type: 'uint256' },
+              { name: 'uri', type: 'string' },
+              { name: 'artist', type: 'address' },
+              { name: 'nonce', type: 'uint256' },
+              { name: 'deadline', type: 'uint256' },
+            ],
+          },
+          primaryType: 'NFTVoucher',
+          message: {
+            nft: nftAddress,
+            tokenId: BigInt(tokenId || '0'),
+            minPrice: BigInt(minPriceWei),
+            uri: metadataUri || '',
+            artist: artist,
+            nonce: BigInt(nonce),
+            deadline: BigInt(deadline),
+          },
+          signature,
+        });
+      } catch (recErr) {
+        return send(response, 400, { error: { code: 'INVALID_SIGNATURE', message: `Malformed voucher signature: ${recErr.message}` } });
+      }
+
+      if (recoveredSigner.toLowerCase() !== artist.toLowerCase()) {
+        return send(response, 400, { error: { code: 'SIGNATURE_MISMATCH', message: 'Voucher signature does not match artist address.' } });
       }
 
       const voucher = await prisma.lazyVoucher.upsert({
@@ -891,22 +954,24 @@ const server = http.createServer(async (request, response) => {
   // GET Lots — paginated, filterable, searchable
   if (request.method === 'GET' && (url.pathname === '/api/lots' || url.pathname === '/lots')) {
     try {
-      const page    = Math.max(1, parseInt(url.searchParams.get('page')   || '1',    10));
-      const limit   = Math.min(100, parseInt(url.searchParams.get('limit')  || '50',   10));
-      const q       = url.searchParams.get('q')       || '';
-      const status  = url.searchParams.get('status')  || '';
-      const sortParam = url.searchParams.get('sort')  || 'newest';
-      const creator = url.searchParams.get('creator') || '';
+      const rawPage = parseInt(url.searchParams.get('page') || '1', 10);
+      const rawLimit = parseInt(url.searchParams.get('limit') || '50', 10);
+      const page = Math.max(1, isNaN(rawPage) ? 1 : rawPage);
+      const limit = Math.max(1, Math.min(100, isNaN(rawLimit) ? 50 : rawLimit));
+      const q = (url.searchParams.get('q') || '').trim();
+      const status = url.searchParams.get('status') || '';
+      const sortParam = url.searchParams.get('sort') || 'newest';
+      const creator = (url.searchParams.get('creator') || '').trim().toLowerCase();
 
       const where = {};
       if (status && ['active','settled','cancelled','indexed'].includes(status)) where.status = status;
-      if (creator) where.creator = { equals: creator, mode: 'insensitive' };
+      if (creator) where.creator = creator;
       if (q) {
         where.OR = [
-          { title:        { contains: q, mode: 'insensitive' } },
-          { artistName:   { contains: q, mode: 'insensitive' } },
-          { artistHandle: { contains: q, mode: 'insensitive' } },
-          { creator:      { contains: q, mode: 'insensitive' } },
+          { title: { contains: q } },
+          { artistName: { contains: q } },
+          { artistHandle: { contains: q } },
+          { creator: { contains: q } },
         ];
       }
 
