@@ -193,7 +193,20 @@ async function rejectUnlessRole(request, response, allowedRoles = ['admin']) {
 function readJson(request, maxBytes = 64 * 1024) {
   return new Promise((resolve, reject) => {
     let body = ''; let size = 0; let done = false;
-    request.on('data', (chunk) => { if (done) return; size += chunk.length; if (size > maxBytes) { done = true; reject(Object.assign(new Error('Request body exceeds limit.'), { status: 413 })); request.destroy(); } else body += chunk; });
+    request.on('data', (chunk) => {
+      if (done) return;
+      size += chunk.length;
+      if (size > maxBytes) {
+        done = true;
+        // Send 413 before closing — client must receive a valid HTTP response
+        const err = Object.assign(new Error('Request body exceeds limit.'), { status: 413 });
+        reject(err);
+        // Drain remaining data before destroying to allow response to flush
+        request.resume();
+      } else {
+        body += chunk;
+      }
+    });
     request.on('end', () => { if (done) return; try { resolve(JSON.parse(body || '{}')); } catch { reject(Object.assign(new Error('Invalid JSON body.'), { status: 400 })); } });
     request.on('error', reject);
   });
@@ -385,11 +398,20 @@ const server = http.createServer(async (request, response) => {
           ? configuredDomains
           : ['127.0.0.1:8787', 'localhost:8787', '127.0.0.1:4173', 'localhost:4173', '127.0.0.1', 'localhost'];
 
+        // Build allowed URIs from trusted origins for URI validation
+        const allowedUris = TRUSTED_ORIGINS.concat([
+          'http://127.0.0.1:8787',
+          'http://localhost:8787',
+          'http://127.0.0.1:4173',
+          'http://localhost:4173',
+        ]);
+
         const validation = validateSiweMessage(message, {
           expectedAddress: address,
           expectedNonce: nonce,
           expectedChainId: activeChainId,
           allowedDomains,
+          allowedUris,
         });
         if (!validation.valid) {
           return send(response, 400, { error: { code: 'INVALID_SIWE_MESSAGE', message: validation.reason } });
@@ -549,6 +571,9 @@ const server = http.createServer(async (request, response) => {
       const { handle, displayName, bio } = await readJson(request);
       if (!handle || !displayName) return send(response, 400, { error: { code: 'BAD_REQUEST', message: 'handle and displayName are required.' } });
       if (!/^[a-z0-9_]{2,32}$/.test(handle)) return send(response, 400, { error: { code: 'BAD_REQUEST', message: 'handle must be 2–32 lowercase alphanumeric/underscore chars.' } });
+      // Field length limits to prevent oversized data reaching the DB
+      if (typeof displayName !== 'string' || displayName.length > 200) return send(response, 400, { error: { code: 'BAD_REQUEST', message: 'displayName must be a string of at most 200 characters.' } });
+      if (bio !== undefined && bio !== null && (typeof bio !== 'string' || bio.length > 2000)) return send(response, 400, { error: { code: 'BAD_REQUEST', message: 'bio must be a string of at most 2000 characters.' } });
       const artist = await prisma.artist.upsert({
         where: { walletAddress: sess.address },
         create: { walletAddress: sess.address, handle: handle.toLowerCase(), displayName, bio: bio || null, approvalStatus: 'pending' },
@@ -556,6 +581,8 @@ const server = http.createServer(async (request, response) => {
       });
       return send(response, 201, { data: artist });
     } catch (err) {
+      if (err.status === 413) return send(response, 413, { error: { code: 'BODY_TOO_LARGE', message: 'Request body exceeds maximum allowed size.' } });
+      if (err.status === 400) return send(response, 400, { error: { code: 'BAD_REQUEST', message: err.message } });
       if (err.code === 'P2002') return send(response, 409, { error: { code: 'CONFLICT', message: 'Handle or wallet address already registered.' } });
       return send(response, 500, { error: { code: 'DB_ERROR', message: err.message } });
     }
@@ -671,10 +698,11 @@ const server = http.createServer(async (request, response) => {
       broadcastSse('lots_updated', { type: 'delist', contractAddress, tokenId });
       return send(response, 200, { success: true, delisted: { contractAddress: contractAddress.toLowerCase(), tokenId: tokenId.toString(), reason } });
     } catch (err) {
+      if (err.status === 413) return send(response, 413, { error: { code: 'BODY_TOO_LARGE', message: 'Request body exceeds maximum allowed size.' } });
+      if (err.status === 400) return send(response, 400, { error: { code: 'BAD_REQUEST', message: err.message } });
       return send(response, 500, { error: { code: 'DB_ERROR', message: err.message } });
     }
   }
-
   // GET /api/users/:address/history.csv (Transaction history export for tax self-reporting)
   if (request.method === 'GET' && url.pathname.match(/^\/api\/users\/0x[a-fA-F0-9]{40}\/history\.csv$/)) {
     const address = url.pathname.split('/')[3].toLowerCase();
@@ -946,6 +974,8 @@ const server = http.createServer(async (request, response) => {
 
       return send(response, 201, { data: voucher });
     } catch (err) {
+      if (err.status === 413) return send(response, 413, { error: { code: 'BODY_TOO_LARGE', message: 'Request body exceeds maximum allowed size.' } });
+      if (err.status === 400) return send(response, 400, { error: { code: 'BAD_REQUEST', message: err.message } });
       console.error('[api] Save voucher error:', err);
       return send(response, 500, { message: 'Failed to record lazy mint voucher.' });
     }

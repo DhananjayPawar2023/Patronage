@@ -13,6 +13,8 @@
     "test:local-vertical": "node scripts/test-local-vertical-slice.mjs",
     "test:api-security": "node scripts/test-api-security.mjs",
     "test:siwe-runtime": "node scripts/test-siwe-runtime.mjs",
+    "goal2:test": "node scripts/goal2-quality-gate.mjs",
+    "verify:production": "node scripts/verify-all.mjs",
     "deploy": "node scripts/deploy.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
     "api": "node api/server.mjs",

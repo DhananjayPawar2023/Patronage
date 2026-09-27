@@ -1,0 +1,211 @@
+name: Goal 2 — Backend / API / Database / Indexer quality gates
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend-api:
+    name: Backend / API / DB / Indexer Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Initialize SQLite database (push schema)
+        run: npx prisma db push --force-reset
+        env:
+          DATABASE_URL: file:./ci-test.db
+
+      - name: Compile contracts and deploy to local Anvil
+        run: |
+          # Start Anvil in background
+          anvil --host 127.0.0.1 --port 8545 --chain-id 31337 &
+          ANVIL_PID=$!
+          echo "ANVIL_PID=$ANVIL_PID" >> $GITHUB_ENV
+
+          # Wait for Anvil to be ready
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:8545 -X POST -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' > /dev/null 2>&1; then
+              echo "Anvil ready"
+              break
+            fi
+            sleep 1
+          done
+
+          # Deploy contracts
+          node scripts/deploy-local.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          API_PORT: "8787"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          LOCAL_UPLOAD_DIR: ./uploads
+          VITE_DEFAULT_AUCTION_MIN_INCREMENT_ETH: "0.01"
+          PATRON_EDITION_MINT_PRICE_ETH: "0.01"
+          PATRON_EDITION_BASE_URI: ""
+          LOCAL_RESET_DATABASE_ON_START: "false"
+          INDEXER_REPLAY_FROM: ""
+
+      - name: Start API server
+        run: |
+          node api/server.mjs &
+          API_PID=$!
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
+
+          # Wait for API to be ready
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:8787/health > /dev/null 2>&1; then
+              echo "API ready"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8787/health
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          API_PORT: "8787"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          LOCAL_UPLOAD_DIR: ./uploads
+          VITE_DEFAULT_AUCTION_MIN_INCREMENT_ETH: "0.01"
+          PATRON_EDITION_MINT_PRICE_ETH: "0.01"
+          PATRON_EDITION_BASE_URI: ""
+          LOCAL_RESET_DATABASE_ON_START: "false"
+          INDEXER_REPLAY_FROM: ""
+          NODE_ENV: test
+
+      - name: Start indexer
+        run: |
+          node services/indexer/vendored-adapter.mjs &
+          sleep 5
+          echo "Indexer started"
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          API_PORT: "8787"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          LOCAL_UPLOAD_DIR: ./uploads
+          INDEXER_REPLAY_FROM: ""
+          NODE_ENV: test
+
+      - name: Run Goal 2 — Auth Edge-Case Audit (20 checks)
+        run: node scripts/goal2-auth-audit.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          API_PORT: "8787"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          NODE_ENV: test
+
+      - name: Run Goal 2 — RBAC / Authorization Audit (34 checks)
+        run: node scripts/goal2-rbac-audit.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          API_PORT: "8787"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          NODE_ENV: test
+
+      - name: Run Goal 2 — API Input Validation Audit (30 checks)
+        run: node scripts/goal2-input-validation-audit.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          API_PORT: "8787"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          NODE_ENV: test
+
+      - name: Run Goal 2 — Database Integrity Audit (12 checks)
+        run: node scripts/goal2-database-audit.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          NODE_ENV: test
+
+      - name: Run Goal 2 — Indexer Reliability Audit (10 checks)
+        run: node scripts/goal2-indexer-audit.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          API_PORT: "8787"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          NODE_ENV: test
+
+      - name: Run Goal 2 — Rate Limiting / CORS / Abuse Protection Audit (13 checks)
+        run: node scripts/goal2-ratelimit-audit.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          API_PORT: "8787"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          NODE_ENV: test
+
+      - name: Run existing SIWE auth unit tests
+        run: node scripts/test-siwe-auth.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          NODE_ENV: test
+
+      - name: Run existing RBAC integration tests
+        run: node scripts/test-rbac-and-durable-auth.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          API_PORT: "8787"
+          VITE_API_BASE_URL: http://127.0.0.1:8787
+          NODE_ENV: test
+
+      - name: Run existing indexer durability tests
+        run: node scripts/test-indexer-durability.mjs
+        env:
+          DATABASE_URL: file:./ci-test.db
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          NODE_ENV: test
+
+      - name: Audit summary
+        run: |
+          echo "================================================================"
+          echo " GOAL 2 — BACKEND / API / DB / INDEXER: ALL CHECKS PASSED ✔"
+          echo " Auth audit:        20 checks"
+          echo " RBAC audit:        34 checks"
+          echo " Input validation:  30 checks"
+          echo " Database audit:    12 checks"
+          echo " Indexer audit:     10 checks"
+          echo " Rate limiting:     13 checks"
+          echo " Existing SIWE:     4  checks"
+          echo " Existing RBAC:     5  checks"
+          echo " Existing indexer:  4  checks"
+          echo " ──────────────────────────"
+          echo " TOTAL:             132 checks"
+          echo "================================================================"

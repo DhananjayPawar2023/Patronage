@@ -225,7 +225,7 @@ Issued At: ${issuedAt}`;
 /**
  * Validate EIP-4361 Message fields against server policy
  */
-export function validateSiweMessage(message, { expectedAddress, expectedNonce, expectedChainId, expectedUri, allowedDomains = [] } = {}) {
+export function validateSiweMessage(message, { expectedAddress, expectedNonce, expectedChainId, expectedUri, allowedDomains = [], allowedUris = [] } = {}) {
   if (!message || typeof message !== 'string') return { valid: false, reason: 'Empty message' };
 
   // Parse header
@@ -276,6 +276,17 @@ export function validateSiweMessage(message, { expectedAddress, expectedNonce, e
     });
     if (!isDomainAllowed) {
       return { valid: false, reason: `Unauthorized domain ${domain}` };
+    }
+  }
+
+  // Validate URI is within trusted origins (EIP-4361 §7 — URI must be same site)
+  if (allowedUris && allowedUris.length > 0) {
+    const msgUri = uriMatch[1].replace(/\/$/, '');
+    const isUriAllowed = allowedUris.some((u) => {
+      return msgUri.toLowerCase() === u.toLowerCase().replace(/\/$/, '');
+    });
+    if (!isUriAllowed) {
+      return { valid: false, reason: `Unauthorized URI ${uriMatch[1]}` };
     }
   }
 
