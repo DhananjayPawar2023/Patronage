@@ -10,9 +10,22 @@ const ddl = [
     "handle" TEXT UNIQUE NOT NULL,
     "displayName" TEXT NOT NULL,
     "bio" TEXT,
+    "websiteUrl" TEXT,
+    "instagramUrl" TEXT,
+    "xUrl" TEXT,
     "approvalStatus" TEXT NOT NULL DEFAULT 'approved',
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
+  `CREATE TABLE IF NOT EXISTS "ArtistFollow" (
+    "id" TEXT PRIMARY KEY,
+    "followerAddress" TEXT NOT NULL,
+    "artistId" TEXT NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY ("artistId") REFERENCES "Artist" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+  );`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "ArtistFollow_followerAddress_artistId_key" ON "ArtistFollow"("followerAddress", "artistId");`,
+  `CREATE INDEX IF NOT EXISTS "ArtistFollow_artistId_createdAt_idx" ON "ArtistFollow"("artistId", "createdAt");`,
+  `CREATE INDEX IF NOT EXISTS "ArtistFollow_followerAddress_createdAt_idx" ON "ArtistFollow"("followerAddress", "createdAt");`,
   `CREATE TABLE IF NOT EXISTS "Lot" (
     "id" TEXT PRIMARY KEY,
     "chainId" INTEGER NOT NULL,
@@ -158,6 +171,15 @@ export async function initDatabase() {
   console.log('[db] Initializing database tables...');
   for (const sql of ddl) {
     await prisma.$executeRawUnsafe(sql);
+  }
+  for (const sql of [
+    `ALTER TABLE "Artist" ADD COLUMN "websiteUrl" TEXT;`,
+    `ALTER TABLE "Artist" ADD COLUMN "instagramUrl" TEXT;`,
+    `ALTER TABLE "Artist" ADD COLUMN "xUrl" TEXT;`,
+  ]) {
+    try { await prisma.$executeRawUnsafe(sql); } catch (error) {
+      if (!String(error.message).includes('duplicate column')) throw error;
+    }
   }
   try {
     await prisma.$executeRawUnsafe(`ALTER TABLE "Lot" ADD COLUMN "buyNowWei" TEXT;`);

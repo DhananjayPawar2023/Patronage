@@ -13,36 +13,31 @@ import {
 const require = createRequire(import.meta.url)
 
 function openDatabase(path: string) {
-  try {
-    const { DatabaseSync } = require('node:sqlite')
-    const raw = new DatabaseSync(path)
-    return {
-      exec: (sql: string) => raw.exec(sql),
-      prepare: (sql: string) => raw.prepare(sql),
-      pragma: (pragmaStr: string) => {
-        if (pragmaStr.startsWith('table_info(')) {
-          return raw.prepare(`PRAGMA ${pragmaStr}`).all()
+  const { DatabaseSync } = require('node:sqlite')
+  const raw = new DatabaseSync(path)
+  return {
+    exec: (sql: string) => raw.exec(sql),
+    prepare: (sql: string) => raw.prepare(sql),
+    pragma: (pragmaStr: string) => {
+      if (pragmaStr.startsWith('table_info(')) {
+        return raw.prepare(`PRAGMA ${pragmaStr}`).all()
+      }
+      return raw.exec(`PRAGMA ${pragmaStr}`)
+    },
+    transaction: <T extends (...args: any[]) => any>(fn: T): T => {
+      return ((...args: any[]) => {
+        raw.exec('BEGIN IMMEDIATE')
+        try {
+          const result = fn(...args)
+          raw.exec('COMMIT')
+          return result
+        } catch (err) {
+          raw.exec('ROLLBACK')
+          throw err
         }
-        return raw.exec(`PRAGMA ${pragmaStr}`)
-      },
-      transaction: <T extends (...args: any[]) => any>(fn: T): T => {
-        return ((...args: any[]) => {
-          raw.exec('BEGIN IMMEDIATE')
-          try {
-            const result = fn(...args)
-            raw.exec('COMMIT')
-            return result
-          } catch (err) {
-            raw.exec('ROLLBACK')
-            throw err
-          }
-        }) as T
-      },
-      close: () => raw.close(),
-    }
-  } catch {
-    const Database = require('better-sqlite3')
-    return new Database(path)
+      }) as T
+    },
+    close: () => raw.close(),
   }
 }
 

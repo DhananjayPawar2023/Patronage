@@ -13,9 +13,25 @@ model Artist {
   handle         String   @unique
   displayName    String
   bio            String?
+  websiteUrl     String?
+  instagramUrl   String?
+  xUrl           String?
   approvalStatus String   @default("approved")
   createdAt      DateTime @default(now())
   lots           Lot[]
+  followers      ArtistFollow[]
+}
+
+model ArtistFollow {
+  id              String   @id @default(cuid())
+  followerAddress String
+  artistId        String
+  createdAt       DateTime @default(now())
+  artist          Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+
+  @@unique([followerAddress, artistId])
+  @@index([artistId, createdAt])
+  @@index([followerAddress, createdAt])
 }
 
 model Lot {
@@ -172,4 +188,3 @@ model LazyVoucher {
 
   @@unique([chainId, nftAddress, tokenId, nonce])
 }
-

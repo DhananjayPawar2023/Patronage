@@ -173,6 +173,12 @@ function formatTimeRemaining(endTime) {
   return `${hours}h ${mins}m ${secs}s`;
 }
 
+function artistDisplayLabel(name, address) {
+  if (typeof name === 'string' && name.trim()) return name.trim();
+  if (typeof address === 'string' && address.length >= 12) return `Wallet ${address.slice(0, 6)}…${address.slice(-4)}`;
+  return 'Unattributed wallet';
+}
+
 function App() {
   const [activeChainId, setActiveChainId] = useState(31337);
   const activeNetwork = useMemo(() => NETWORKS[activeChainId] || NETWORKS[31337], [activeChainId]);
@@ -267,6 +273,11 @@ function App() {
   // Collector profile tab
   const [profileData, setProfileData] = useState(null);
   const [profileTab, setProfileTab] = useState('created'); // 'created' | 'bids' | 'notifications'
+  const [artistEditForm, setArtistEditForm] = useState({ displayName: '', bio: '', websiteUrl: '', instagramUrl: '', xUrl: '' });
+  const [artistEditPending, setArtistEditPending] = useState(false);
+  const [artistProfileData, setArtistProfileData] = useState(null);
+  const [artistProfileLoading, setArtistProfileLoading] = useState(false);
+  const [artistFollowPending, setArtistFollowPending] = useState(false);
 
   // Live countdown ticker state (ticks every second)
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -655,12 +666,85 @@ function App() {
   async function loadProfile() {
     if (!activeAccount?.address) return;
     try {
-      const res = await fetch(`${apiBase}/api/profile/${activeAccount.address}`);
+      const res = await fetch(`${apiBase}/api/profile/${activeAccount.address}`, {
+        headers: session?.token ? { Authorization: `Bearer ${session.token}` } : {},
+      });
       if (!res.ok) return;
       const body = await res.json();
       setProfileData(body.data);
+      if (body.data?.artist) {
+        const { displayName = '', bio = '', websiteUrl = '', instagramUrl = '', xUrl = '' } = body.data.artist;
+        setArtistEditForm({ displayName, bio, websiteUrl, instagramUrl, xUrl });
+      }
     } catch {}
   }
+
+  async function handleArtistProfileSave(event) {
+    event.preventDefault();
+    setArtistEditPending(true);
+    try {
+      const token = session?.token || await getOrInitSession(activeAccount);
+      const response = await fetch(`${apiBase}/api/artists/profile`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(artistEditForm),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || 'Could not save artist profile.');
+      setProfileData((current) => ({ ...current, artist: { ...current.artist, ...payload.data } }));
+      alert('Artist profile saved.');
+    } catch (error) {
+      alert(`Profile update failed: ${error.message}`);
+    } finally {
+      setArtistEditPending(false);
+    }
+  }
+
+  async function loadArtistProfile() {
+    if (!viewingArtist?.address) return;
+    setArtistProfileLoading(true);
+    setArtistProfileData(null);
+    try {
+      const headers = session?.token ? { Authorization: `Bearer ${session.token}` } : {};
+      const response = await fetch(`${apiBase}/api/profile/${viewingArtist.address}`, { headers });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || 'Unable to load artist profile.');
+      setArtistProfileData(payload.data);
+    } catch (error) {
+      setArtistProfileData({ error: error.message });
+    } finally {
+      setArtistProfileLoading(false);
+    }
+  }
+
+  async function toggleArtistFollow() {
+    const artist = artistProfileData?.artist;
+    if (!artist || !activeAccount?.address) return;
+    setArtistFollowPending(true);
+    try {
+      const token = session?.token || await getOrInitSession(activeAccount);
+      const nextFollowing = !artistProfileData.viewerFollows;
+      const response = await fetch(`${apiBase}/api/artists/${encodeURIComponent(artist.handle)}/follow`, {
+        method: nextFollowing ? 'POST' : 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || 'Could not update follow.');
+      setArtistProfileData((current) => ({
+        ...current,
+        viewerFollows: payload.data.following,
+        artist: { ...current.artist, followerCount: payload.data.followerCount },
+      }));
+    } catch (error) {
+      alert(`Follow failed: ${error.message}`);
+    } finally {
+      setArtistFollowPending(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadArtistProfile();
+  }, [viewingArtist?.address, session?.token]);
 
   useEffect(() => {
     void updateAccountDetails();
@@ -1682,7 +1766,7 @@ function App() {
                         e.stopPropagation();
                         setLightboxImage(lot.imageUrl || null);
                         setLightboxTitle(lot.title || 'Untitled Artwork');
-                        setLightboxArtist(lot.artistName || 'Artist');
+                        setLightboxArtist(artistDisplayLabel(lot.artistName, lot.creator));
                         setIsZoomed(false);
                       }}
                       title="Click artwork to open Museum Cinema Lightbox"
@@ -1704,14 +1788,14 @@ function App() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setViewingArtist({
-                                  name: lot.artistName || 'Artist',
+                                  name: artistDisplayLabel(lot.artistName, lot.creator),
                                   handle: lot.artistHandle || '',
                                   address: lot.creator,
                                 });
                               }}
                               title="View artist profile and provenance"
                             >
-                              {lot.artistName || 'Artist'} {lot.artistHandle ? <span>@{lot.artistHandle}</span> : null}
+                              {artistDisplayLabel(lot.artistName, lot.creator)} {lot.artistHandle ? <span>@{lot.artistHandle}</span> : null}
                             </span>
                           </p>
                         </div>
@@ -1747,7 +1831,7 @@ function App() {
                       e.stopPropagation();
                       setLightboxImage(voucher.imageUrl || null);
                       setLightboxTitle(voucher.title || 'Untitled Artwork');
-                      setLightboxArtist(voucher.artistName || 'Artist');
+                      setLightboxArtist(artistDisplayLabel(voucher.artistName, voucher.artist));
                       setIsZoomed(false);
                     }}
                     title="Click artwork to open Museum Cinema Lightbox"
@@ -1767,14 +1851,14 @@ function App() {
                             onClick={(e) => {
                               e.stopPropagation();
                               setViewingArtist({
-                                name: voucher.artistName || 'Artist',
+                                name: artistDisplayLabel(voucher.artistName, voucher.artist),
                                 handle: '',
                                 address: voucher.artist,
                               });
                             }}
                             title="View artist profile"
                           >
-                            {voucher.artistName || 'Artist'}
+                            {artistDisplayLabel(voucher.artistName, voucher.artist)}
                           </span>
                         </p>
                       </div>
@@ -1831,7 +1915,7 @@ function App() {
                 onClick={() => {
                   setLightboxImage(selectedLot.imageUrl || null);
                   setLightboxTitle(selectedLot.title || 'Untitled artwork');
-                  setLightboxArtist(selectedLot.artistName || 'Artist');
+                  setLightboxArtist(artistDisplayLabel(selectedLot.artistName, selectedLot.creator));
                   setIsZoomed(false);
                 }}
                 title="Click to view in Cinema Lightbox"
@@ -1845,13 +1929,13 @@ function App() {
                   className="artist-name"
                   style={{ cursor: 'pointer', textDecoration: 'underline' }}
                   onClick={() => setViewingArtist({
-                    name: selectedLot.artistName || 'Artist',
+                    name: artistDisplayLabel(selectedLot.artistName, selectedLot.creator),
                     handle: selectedLot.artistHandle || '',
                     address: selectedLot.creator,
                   })}
                   title="View creator profile"
                 >
-                  {selectedLot.artistName || 'Artist'} {selectedLot.artistHandle ? <span>@{selectedLot.artistHandle}</span> : null}
+                  {artistDisplayLabel(selectedLot.artistName, selectedLot.creator)} {selectedLot.artistHandle ? <span>@{selectedLot.artistHandle}</span> : null}
                 </p>
 
                 {/* Modal Tabs */}
@@ -2364,6 +2448,20 @@ function App() {
               <div><small>BIDS PLACED</small><b>{profileData?.bidsPlaced?.length ?? '...'}</b></div>
             </div>
 
+            {profileData?.artist && (
+              <form className="artist-profile-edit" onSubmit={handleArtistProfileSave}>
+                <h3>Artist profile · @{profileData.artist.handle}</h3>
+                <label>Display name<input maxLength={80} required value={artistEditForm.displayName} onChange={(e) => setArtistEditForm({ ...artistEditForm, displayName: e.target.value })} /></label>
+                <label>Biography<textarea maxLength={2000} rows={3} value={artistEditForm.bio} onChange={(e) => setArtistEditForm({ ...artistEditForm, bio: e.target.value })} /></label>
+                <label>Website (HTTPS)<input type="url" placeholder="https://…" value={artistEditForm.websiteUrl} onChange={(e) => setArtistEditForm({ ...artistEditForm, websiteUrl: e.target.value })} /></label>
+                <div className="artist-profile-edit-links">
+                  <label>Instagram URL<input type="url" placeholder="https://…" value={artistEditForm.instagramUrl} onChange={(e) => setArtistEditForm({ ...artistEditForm, instagramUrl: e.target.value })} /></label>
+                  <label>X URL<input type="url" placeholder="https://…" value={artistEditForm.xUrl} onChange={(e) => setArtistEditForm({ ...artistEditForm, xUrl: e.target.value })} /></label>
+                </div>
+                <button className="secondary" type="submit" disabled={artistEditPending}>{artistEditPending ? 'Saving…' : 'Save profile'}</button>
+              </form>
+            )}
+
             {parseFloat(refundableEth) > 0 && (
               <button className="primary wide" onClick={handleWithdrawRefund} disabled={txPending}>
                 Withdraw {refundableEth} ETH Refund ↗
@@ -2605,7 +2703,7 @@ function App() {
             <form onSubmit={handleArtistApply}>
               <div className="form-group">
                 <label>Display Name *</label>
-                <input type="text" placeholder="e.g. Ada Goldfield" value={applyDisplayName} onChange={(e) => setApplyDisplayName(e.target.value)} required />
+                <input type="text" placeholder="Your public artist name" value={applyDisplayName} onChange={(e) => setApplyDisplayName(e.target.value)} required />
               </div>
               <div className="form-group">
                 <label>Artist Handle * (lowercase, 2–32 chars)</label>
@@ -2710,33 +2808,46 @@ function App() {
         <div className="modal-bg" onClick={() => setViewingArtist(null)}>
           <div className="modal wallet-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '620px' }}>
             <button className="close" onClick={() => setViewingArtist(null)}>×</button>
-            <p className="eyebrow">VERIFIED CREATOR DOSSIER</p>
+            <p className="eyebrow">ARTIST PROFILE</p>
             <div className="artist-profile-box">
               <div className="artist-header-card">
                 <div className="artist-avatar">
-                  {viewingArtist.name.slice(0, 1).toUpperCase()}
+                  {(artistProfileData?.artist?.displayName || viewingArtist.name || viewingArtist.address).slice(0, 1).toUpperCase()}
                 </div>
                 <div className="artist-titles">
-                  <h3>{viewingArtist.name}</h3>
-                  <p>{viewingArtist.handle ? `@${viewingArtist.handle}` : 'Curated 1/1 Digital Artist'}</p>
+                  <h3>{artistProfileData?.artist?.displayName || viewingArtist.name || 'Wallet profile'}</h3>
+                  <p>{artistProfileData?.artist?.handle ? `@${artistProfileData.artist.handle}` : 'Wallet profile — no artist handle registered'}</p>
                   <code style={{cursor:'pointer'}} onClick={() => navigator.clipboard.writeText(viewingArtist.address)} title="Click to copy">
                     <AddrDisplay address={viewingArtist.address} explorer={activeNetwork.explorer} />
                   </code>
                 </div>
               </div>
 
-              <div style={{ fontSize: '13px', color: '#555', lineHeight: '1.5', background: '#fbf9f5', padding: '14px', borderRadius: '4px', border: '1px solid var(--line)' }}>
-                <b>Artist Statement & On-Chain Provenance:</b>
-                <p style={{ margin: '6px 0 0' }}>
-                  Independent digital artist deploying scarce cryptographic works directly to Ethereum smart contracts with non-custodial custody and EIP-2981 perpetual royalties.
-                </p>
-              </div>
+              {artistProfileLoading && <p role="status">Loading profile from the local index…</p>}
+              {artistProfileData?.error && <p role="alert">Profile could not be loaded: {artistProfileData.error}</p>}
+              {!artistProfileLoading && !artistProfileData?.error && artistProfileData && (
+                <>
+                  {artistProfileData.artist?.bio ? <p className="artist-bio">{artistProfileData.artist.bio}</p> : <p className="subtext">No artist biography has been added.</p>}
+                  {artistProfileData.artist && (
+                    <div className="artist-profile-links">
+                      {artistProfileData.artist.websiteUrl && <a href={artistProfileData.artist.websiteUrl} target="_blank" rel="noreferrer">Website ↗</a>}
+                      {artistProfileData.artist.instagramUrl && <a href={artistProfileData.artist.instagramUrl} target="_blank" rel="noreferrer">Instagram ↗</a>}
+                      {artistProfileData.artist.xUrl && <a href={artistProfileData.artist.xUrl} target="_blank" rel="noreferrer">X ↗</a>}
+                      <span>{artistProfileData.artist.followerCount || 0} followers</span>
+                    </div>
+                  )}
+                  {artistProfileData.artist?.approvalStatus === 'approved' && artistProfileData.address?.toLowerCase() !== activeAccount?.address?.toLowerCase() && (
+                    <button className="secondary wide" onClick={toggleArtistFollow} disabled={artistFollowPending}>
+                      {artistFollowPending ? 'Saving…' : artistProfileData.viewerFollows ? 'Following · Unfollow' : 'Follow artist'}
+                    </button>
+                  )}
+                </>
+              )}
 
               <div>
-                <p className="artist-gallery-title">ARTWORK IN PATRONAGE REPERTOIRE</p>
+                <p className="artist-gallery-title">ON-CHAIN WORKS</p>
                 <div className="artist-works-grid">
-                  {lotsState.lots
-                    .filter((l) => l.creator.toLowerCase() === viewingArtist.address.toLowerCase())
+                  {(artistProfileData?.lotsCreated || [])
                     .map((l) => (
                       <div
                         key={l.lotId}
@@ -2749,6 +2860,9 @@ function App() {
                         title={`View ${l.title}`}
                       />
                     ))}
+                  {!artistProfileLoading && artistProfileData && !artistProfileData.error && (artistProfileData.lotsCreated || []).length === 0 && (
+                    <p className="subtext">No indexed auction works for this wallet yet.</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -2767,7 +2881,7 @@ function App() {
               onClick={() => {
                 setLightboxImage(selectedVoucher.imageUrl || null);
                 setLightboxTitle(selectedVoucher.title || 'Untitled artwork');
-                setLightboxArtist(selectedVoucher.artistName || 'Artist');
+                setLightboxArtist(artistDisplayLabel(selectedVoucher.artistName, selectedVoucher.artist));
                 setIsZoomed(false);
               }}
               title="Click to view in Cinema Lightbox"
@@ -2781,13 +2895,13 @@ function App() {
                 className="artist-name"
                 style={{ cursor: 'pointer', textDecoration: 'underline' }}
                 onClick={() => setViewingArtist({
-                  name: selectedVoucher.artistName || 'Artist',
+                  name: artistDisplayLabel(selectedVoucher.artistName, selectedVoucher.artist),
                   handle: '',
                   address: selectedVoucher.artist,
                 })}
                 title="View creator profile"
               >
-                {selectedVoucher.artistName || 'Artist'}
+                {artistDisplayLabel(selectedVoucher.artistName, selectedVoucher.artist)}
               </p>
 
               <div className="contract-details-box">

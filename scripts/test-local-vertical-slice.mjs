@@ -54,7 +54,7 @@ const uploadResponse = await fetch(`${apiUrl}/api/upload`, {
     title: 'Local vertical slice artwork',
     description: 'Created by the executable local acceptance test.',
     filename: 'vertical-slice.png',
-    imageBase64: 'data:image/png;base64,aGVsbG8=',
+    imageBase64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkWPjfDwAEeQHzH4dYfgAAAABJRU5ErkJggg==',
     artistName: 'Local test artist',
     artistHandle: 'local-test-artist',
   }),
@@ -71,30 +71,18 @@ const collection = await publicClient.readContract({
   args: [accounts[0].address],
 });
 let collectionAddress = collection;
-let isMinted = false;
-if (collectionAddress !== '0x0000000000000000000000000000000000000000') {
-  try {
-    isMinted = await publicClient.readContract({
-      address: collectionAddress,
-      abi: artworkArtifact.abi,
-      functionName: 'minted',
-    });
-  } catch {}
-}
-
-if (collectionAddress === '0x0000000000000000000000000000000000000000' || isMinted) {
-  // Deploy custom ArtworkNFT clone for test idempotency
-  const cloneHash = await wallets[0].deployContract({
-    abi: artworkArtifact.abi,
-    bytecode: artworkArtifact.bytecode,
-  });
-  const cloneRec = await publicClient.waitForTransactionReceipt({ hash: cloneHash });
-  collectionAddress = cloneRec.contractAddress;
+if (collectionAddress === '0x0000000000000000000000000000000000000000') {
   await tx(wallets[0], {
-    address: collectionAddress,
-    abi: artworkArtifact.abi,
-    functionName: 'initialize',
-    args: ['Local Test Collection', 'LTEST', accounts[0].address, auction.address, accounts[0].address, 500],
+    address: factory.address,
+    abi: factory.abi,
+    functionName: 'createCollection',
+    args: ['Local Test Collection', 'LTEST'],
+  });
+  collectionAddress = await publicClient.readContract({
+    address: factory.address,
+    abi: factory.abi,
+    functionName: 'collectionOf',
+    args: [accounts[0].address],
   });
 }
 

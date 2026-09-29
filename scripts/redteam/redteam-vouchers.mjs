@@ -60,8 +60,8 @@ async function main() {
     nonce: 1,
     deadline: Math.floor(Date.now() / 1000) + 86400,
     signature: '0x' + '00'.repeat(65), // Invalid bogus signature
-    title: 'Phishing Bogus Voucher',
-    artistName: 'Victim Artist',
+    title: 'Untrusted Voucher Test Fixture',
+    artistName: 'Fixture Artist',
   };
 
   const unauthRes = await requestHttp('POST', '/api/vouchers', fakeVoucher);

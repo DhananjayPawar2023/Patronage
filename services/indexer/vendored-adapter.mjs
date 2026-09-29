@@ -141,9 +141,16 @@ async function syncLotToPrisma(lotData, txHash, logIndex, blockNumber) {
         status,
       },
       update: {
+        nftAddress: nftAddr,
+        tokenId: tokenIdStr,
+        creator: sellerAddr,
+        metadataUri,
+        reserveWei,
+        minIncrementWei,
         highestBidWei,
         highestBidder,
         buyNowWei: buyNowPriceWei,
+        startTime: startTimeDate,
         endTime: endTimeDate,
         status,
         title: title || undefined,
@@ -191,6 +198,11 @@ async function syncBidToPrisma(bidData) {
   const prevAmountWei = lot.highestBidWei;
 
   try {
+    const existingEvent = await prisma.indexedEvent.findUnique({
+      where: { chainId_transactionHash_logIndex: { chainId, transactionHash: txHash, logIndex } },
+      select: { id: true },
+    });
+
     await prisma.bid.upsert({
       where: { chainId_transactionHash_logIndex: { chainId, transactionHash: txHash, logIndex } },
       create: {
@@ -223,30 +235,41 @@ async function syncBidToPrisma(bidData) {
       update: {},
     });
 
-    if (bidderAddr) {
-      await prisma.notification.create({
-        data: {
-          wallet: bidderAddr,
-          type: 'bid_placed',
-          payload: JSON.stringify({ lotId: lotIdStr, amountEth: formatEther(BigInt(amountWei)), title: lot.title }),
-        },
-      }).catch(() => {});
-    }
+    if (!existingEvent) {
+      if (bidderAddr) {
+        const notificationId = `bid:${chainId}:${txHash}:${logIndex}`;
+        await prisma.notification.upsert({
+          where: { id: notificationId },
+          create: {
+            id: notificationId,
+            wallet: bidderAddr,
+            type: 'bid_placed',
+            payload: JSON.stringify({ lotId: lotIdStr, amountEth: formatEther(BigInt(amountWei)), title: lot.title, transactionHash: txHash }),
+          },
+          update: {},
+        }).catch(() => {});
+      }
 
-    if (prevBidder && prevBidder !== bidderAddr && prevBidder !== '0x0000000000000000000000000000000000000000') {
-      await prisma.notification.create({
-        data: {
-          wallet: prevBidder,
-          type: 'outbid',
-          payload: JSON.stringify({
-            lotId: lotIdStr,
-            title: lot.title,
-            yourBidEth: formatEther(BigInt(prevAmountWei || '0')),
-            newBidEth: formatEther(BigInt(amountWei)),
-            newBidder: bidderAddr,
-          }),
-        },
-      }).catch(() => {});
+      if (prevBidder && prevBidder !== bidderAddr && prevBidder !== '0x0000000000000000000000000000000000000000') {
+        const notificationId = `outbid:${chainId}:${txHash}:${logIndex}`;
+        await prisma.notification.upsert({
+          where: { id: notificationId },
+          create: {
+            id: notificationId,
+            wallet: prevBidder,
+            type: 'outbid',
+            payload: JSON.stringify({
+              lotId: lotIdStr,
+              title: lot.title,
+              yourBidEth: formatEther(BigInt(prevAmountWei || '0')),
+              newBidEth: formatEther(BigInt(amountWei)),
+              newBidder: bidderAddr,
+              transactionHash: txHash,
+            }),
+          },
+          update: {},
+        }).catch(() => {});
+      }
     }
   } catch (err) {
     console.warn(`[vendored-indexer] syncBidToPrisma warning: ${err.message}`);
@@ -299,7 +322,7 @@ async function syncPatronMintToPrisma(mintData) {
   }
 }
 
-async function syncSettlementToPrisma(lotIdStr, winner, amount, txHash, logIndex, blockNumber) {
+async function syncSettlementToPrisma(lotIdStr, winner, amount, txHash, logIndex, blockNumber, eventName = 'LotSettled', notify = true) {
   const lot = await prisma.lot.findUnique({
     where: { chainId_auctionAddress_lotId: { chainId, auctionAddress, lotId: lotIdStr } },
   });
@@ -307,10 +330,20 @@ async function syncSettlementToPrisma(lotIdStr, winner, amount, txHash, logIndex
 
   const winnerAddr = winner && winner !== '0x0000000000000000000000000000000000000000' ? winner.toLowerCase() : null;
   const amountEth = winnerAddr ? formatEther(BigInt(amount || 0)) : '0';
+  const existingEvent = txHash && logIndex !== undefined
+    ? await prisma.indexedEvent.findUnique({
+        where: { chainId_transactionHash_logIndex: { chainId, transactionHash: txHash, logIndex } },
+        select: { id: true },
+      })
+    : null;
 
   await prisma.lot.update({
     where: { id: lot.id },
-    data: { status: 'settled', highestBidder: winnerAddr || lot.highestBidder },
+    data: {
+      status: 'settled',
+      highestBidWei: (amount || 0n).toString(),
+      highestBidder: winnerAddr,
+    },
   });
 
   if (txHash && logIndex !== undefined) {
@@ -320,7 +353,7 @@ async function syncSettlementToPrisma(lotIdStr, winner, amount, txHash, logIndex
         chainId,
         transactionHash: txHash,
         logIndex,
-        eventName: 'LotSettled',
+        eventName,
         blockNumber: (blockNumber || 0).toString(),
         payload: JSON.stringify({ lotId: lotIdStr, winner: winnerAddr, amount: (amount || 0).toString() }),
       },
@@ -328,35 +361,41 @@ async function syncSettlementToPrisma(lotIdStr, winner, amount, txHash, logIndex
     });
   }
 
-  if (lot.creator) {
-    await prisma.notification.create({
-      data: {
-        wallet: lot.creator.toLowerCase(),
-        type: 'lot_settled_seller',
-        payload: JSON.stringify({
-          lotId: lotIdStr,
-          title: lot.title,
-          soldTo: winnerAddr,
-          amountEth,
-        }),
-      },
-    }).catch(() => {});
-  }
+  if (notify && !existingEvent && txHash !== undefined && logIndex !== undefined) {
+    if (lot.creator) {
+      const notificationId = `settled-seller:${chainId}:${txHash}:${logIndex}`;
+      await prisma.notification.upsert({
+        where: { id: notificationId },
+        create: {
+          id: notificationId,
+          wallet: lot.creator.toLowerCase(),
+          type: 'lot_settled_seller',
+          payload: JSON.stringify({ lotId: lotIdStr, title: lot.title, soldTo: winnerAddr, amountEth, transactionHash: txHash }),
+        },
+        update: {},
+      }).catch(() => {});
+    }
 
-  if (winnerAddr && winnerAddr.toLowerCase() !== lot.creator.toLowerCase()) {
-    await prisma.notification.create({
-      data: {
-        wallet: winnerAddr.toLowerCase(),
-        type: 'lot_won',
-        payload: JSON.stringify({
-          lotId: lotIdStr,
-          title: lot.title,
-          amountEth,
-          nftAddress: lot.nftAddress,
-          tokenId: lot.tokenId,
-        }),
-      },
-    }).catch(() => {});
+    if (winnerAddr && winnerAddr !== lot.creator.toLowerCase()) {
+      const notificationId = `lot-won:${chainId}:${txHash}:${logIndex}`;
+      await prisma.notification.upsert({
+        where: { id: notificationId },
+        create: {
+          id: notificationId,
+          wallet: winnerAddr,
+          type: 'lot_won',
+          payload: JSON.stringify({
+            lotId: lotIdStr,
+            title: lot.title,
+            amountEth,
+            nftAddress: lot.nftAddress,
+            tokenId: lot.tokenId,
+            transactionHash: txHash,
+          }),
+        },
+        update: {},
+      }).catch(() => {});
+    }
   }
 }
 
@@ -389,11 +428,9 @@ const auctionEvents = {
       highestBid: event.args.amount,
       end: event.args.end,
     });
-    const updatedLot = await store.get('lots', lotId);
-    if (updatedLot) {
-      await syncLotToPrisma(updatedLot);
-    }
     await syncBidToPrisma(bidData);
+    const updatedLot = await store.get('lots', lotId);
+    if (updatedLot) await syncLotToPrisma(updatedLot);
   },
   LotSettled: async ({ event, store }) => {
     const lotId = event.args.lotId.toString();
@@ -448,7 +485,9 @@ const auctionEvents = {
       event.args.amount,
       event.transactionHash,
       event.logIndex,
-      event.block
+      event.block,
+      'BuyNowExecuted',
+      false
     );
   },
   BuyNowConfigured: async ({ event, store }) => {

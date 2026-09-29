@@ -20,11 +20,8 @@ Its two-layer design keeps a raw event cache separate from derived state, so rei
 pnpm add @1001-digital/simple-indexer viem
 ```
 
-For the SQLite store (server only):
-
-```sh
-pnpm add better-sqlite3
-```
+The SQLite store is server-only and uses Node's built-in `node:sqlite` module
+(Node 22.5 or newer); no native package install is required.
 
 ## Quick start
 
@@ -135,7 +132,7 @@ const store = createSqliteStore('./data.db', {
 })
 ```
 
-Imported from a separate entry point to avoid bundling `better-sqlite3` in browser builds. Uses WAL mode for performance.
+Imported from a separate entry point to avoid bundling Node-only SQLite support in browser builds. Uses Node's built-in `node:sqlite` (`DatabaseSync`) and WAL mode; Node 22.5 or newer is required.
 
 ## Config
 

@@ -21,6 +21,8 @@ Build and verify Patronage as a real local-development NFT auction platform:
 - Create-artwork flow that uploads, creates a collection, mints an NFT, approves the auction house, and creates a lot.
 - Bid, withdraw-refund, settle, and Patron Edition actions wired to contract transactions.
 - Runtime contract addresses and RPC URL loaded from local deployment/configuration rather than a fixed production chain.
+- Artist profiles use persisted identity and indexed works; approved artists can be followed by authenticated wallets. Profile edits are wallet-session-bound and support biographies and HTTPS social links.
+- Unregistered creators are identified by wallet address rather than a fabricated artist name.
 
 ### Smart contracts
 
@@ -69,7 +71,7 @@ PostgreSQL compatibility is partly prepared through Prisma, but a complete provi
 
 ### Indexer
 
-`services/indexer/index.mjs`:
+`services/indexer/vendored-adapter.mjs` is launched by the current `pnpm dev` path:
 
 - Reads local deployment artifacts.
 - Reads Auction House, NFT, Artist Factory, and Patron Edition events.
@@ -80,7 +82,7 @@ PostgreSQL compatibility is partly prepared through Prisma, but a complete provi
 - Retries unresolved metadata.
 - Exposes indexer health information through the API.
 
-Reorganization handling, rollback, dead-letter processing, precise lag reporting, and a fully demonstrated restart/rebuild workflow remain incomplete.
+The active path uses a durable local SQLite event cache, reconciles derived lots/bids/Patron Edition mints into Prisma, and supports replay, checkpoint restart, block-hash validation, reorg rollback, and health/lag/retry/dead-letter reporting. The legacy implementation remains at `services/indexer/index.mjs` and is not the default local path.
 
 ### Local development tooling
 
@@ -101,6 +103,11 @@ The following checks have been executed in this repository:
 - `npm.cmd run db:reset:local` — passed during local reset verification.
 - `npm.cmd run contracts:test` — passed: 9 Foundry tests, 0 failures.
 - `npm.cmd run test:local-vertical` — passed in a live local stack.
+- On 2026-09-29, `pnpm dev` was run with services stopped; it compiled contracts, initialized SQLite, started Anvil, deployed contracts, and started the API/indexer/Vite. API, indexer, and frontend health checks returned HTTP 200.
+- `node scripts/test-artist-profile-runtime.mjs` — passed against the live API for public lookup, profile edits, approved-artist follow/unfollow, idempotency, self-follow rejection, auth boundaries, URL validation, and notification privacy.
+- `node scripts/test-api-security.mjs` and `node scripts/test-siwe-runtime.mjs` — passed against the live API.
+- Prisma validation/client generation, additive SQLite initialization, and `pnpm build` — passed after artist profile schema changes.
+- Removed 14 persisted local voucher rows that matched hardcoded acceptance/red-team fixtures; the browser then showed an honest empty marketplace.
 
 The successful vertical slice verified real local blockchain transactions for:
 
@@ -154,7 +161,7 @@ This proves a local vertical slice, not completion of the entire product or prod
 - Add draft artwork records, upload progress, resumable uploads, thumbnail generation, and reconciliation when a wallet transaction is interrupted.
 - Finish provider interfaces for storage, database, RPC, search, notifications, and analytics. Local implementations must be the default; production implementations must fail explicitly when not configured rather than silently hiding failures.
 - Add persistent local notifications and analytics events with privacy boundaries.
-- Add profiles, follows, comments, watchlists, moderation, reporting, and admin workflows backed by authorization.
+- Extend profiles/follows with avatar and cover upload, collections, comments, watchlists, following activity, reporting, and moderation workflows backed by authorization.
 - Add accessibility work: keyboard navigation, focus management, labels, screen-reader states, reduced motion, contrast, and responsive behavior.
 - Improve database indexes, migration discipline, transaction boundaries, and PostgreSQL verification.
 - Add transaction records and confirmation tracking for every user-visible blockchain operation.

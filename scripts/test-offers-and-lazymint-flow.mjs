@@ -140,9 +140,9 @@ async function runTest() {
       nonce: nonce.toString(),
       deadline: deadline.toString(),
       signature: voucherSignature,
-      title: 'Cosmic Singularity (Lazy Mint)',
+      title: 'Acceptance Fixture Artwork',
       imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe',
-      artistName: 'Ada Goldfield',
+      artistName: 'Fixture Artist',
     }),
   });
   const saveBody = await saveVoucherRes.json();

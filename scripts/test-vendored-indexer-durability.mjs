@@ -78,8 +78,13 @@ try {
   });
   console.log(output2.trim());
 
-  if (!output2.includes(`starting from ${lastBlock + 1}`)) {
-    throw new Error(`Expected indexer to resume from ${lastBlock + 1}, but output was:\n${output2}`);
+  // The adapter's process-level log uses the Prisma checkpoint, while the
+  // vendored engine resumes each contract from its own SQLite cursor. Assert
+  // against the actual first SQLite-backed sync chunk; Anvil may mine between
+  // the two one-shot processes, so requiring an exact global "starting from"
+  // number is race-prone and can reject a correct resume.
+  if (!output2.includes(`chunk ${lastBlock + 1}->`) || output2.includes('chunk 0->')) {
+    throw new Error(`Expected vendored store resume at block ${lastBlock + 1} (not block zero), but output was:\n${output2}`);
   }
   console.log(`  ✔ Verified clean resume from block ${lastBlock + 1} without re-fetching historical blocks!`);
 

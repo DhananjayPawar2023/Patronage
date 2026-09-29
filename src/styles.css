@@ -1687,6 +1687,68 @@ footer a:hover {
   margin-top: 14px;
 }
 
+.artist-bio {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.artist-profile-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.artist-profile-links a {
+  color: var(--accent-gold);
+}
+
+.artist-profile-edit {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-medium);
+  border-radius: 8px;
+}
+
+.artist-profile-edit h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.artist-profile-edit label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.artist-profile-edit input,
+.artist-profile-edit textarea {
+  width: 100%;
+  padding: 10px;
+  color: var(--text-primary);
+  background: var(--bg-input, #111);
+  border: 1px solid var(--border-medium);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.artist-profile-edit-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 520px) {
+  .artist-profile-edit-links { grid-template-columns: 1fr; }
+}
+
 .artist-header-card {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border-medium);
@@ -2235,4 +2297,3 @@ footer a:hover {
   transform: translateY(-2px);
   box-shadow: 0 12px 30px -4px rgba(59, 130, 246, 0.6);
 }
-

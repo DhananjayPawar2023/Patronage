@@ -83,7 +83,7 @@ function send(response, status, body, contentType = 'application/json; charset=u
     'content-type': contentType,
     'cache-control': 'no-store',
     'access-control-allow-origin': resolveCorsOrigin(reqOrigin),
-    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'access-control-allow-headers': 'Content-Type, Authorization',
     'x-content-type-options': 'nosniff',
     'x-frame-options': 'DENY',
@@ -588,12 +588,94 @@ const server = http.createServer(async (request, response) => {
     }
   }
 
+  // Authenticated artist profile edits. Handles remain unique and wallet ownership is session-bound.
+  if (request.method === 'PUT' && url.pathname === '/api/artists/profile') {
+    if (await rejectUnauthorized(request, response)) return;
+    const sess = await sessionFromRequest(request);
+    try {
+      const body = await readJson(request, 16 * 1024);
+      const { displayName, bio, websiteUrl, instagramUrl, xUrl } = body;
+      if (typeof displayName !== 'string' || displayName.trim().length < 1 || displayName.trim().length > 80) {
+        return send(response, 400, { error: { code: 'BAD_REQUEST', message: 'displayName must contain 1–80 characters.' } });
+      }
+      if (bio != null && (typeof bio !== 'string' || bio.length > 2000)) {
+        return send(response, 400, { error: { code: 'BAD_REQUEST', message: 'bio must be at most 2000 characters.' } });
+      }
+      const safeUrl = (value, field) => {
+        if (value == null || value === '') return null;
+        if (typeof value !== 'string' || value.length > 300) throw new Error(`${field} must be a URL under 300 characters.`);
+        let parsed;
+        try { parsed = new URL(value); } catch { throw new Error(`${field} must be a valid HTTPS URL.`); }
+        if (parsed.protocol !== 'https:') throw new Error(`${field} must use HTTPS.`);
+        return parsed.toString();
+      };
+      const urls = {
+        websiteUrl: safeUrl(websiteUrl, 'websiteUrl'),
+        instagramUrl: safeUrl(instagramUrl, 'instagramUrl'),
+        xUrl: safeUrl(xUrl, 'xUrl'),
+      };
+      const artist = await prisma.artist.findUnique({ where: { walletAddress: sess.address.toLowerCase() } });
+      if (!artist) return send(response, 404, { error: { code: 'ARTIST_NOT_FOUND', message: 'Submit an artist application before editing a profile.' } });
+      const updated = await prisma.artist.update({
+        where: { id: artist.id },
+        data: { displayName: displayName.trim(), bio: bio?.trim() || null, ...urls },
+        select: { walletAddress: true, handle: true, displayName: true, bio: true, websiteUrl: true, instagramUrl: true, xUrl: true, approvalStatus: true },
+      });
+      return send(response, 200, { data: updated });
+    } catch (err) {
+      const status = err.status === 413 ? 413 : err.status === 400 ? 400 : /must use HTTPS|must be a URL|must be a valid HTTPS/.test(err.message || '') ? 400 : 500;
+      return send(response, status, { error: { code: status === 500 ? 'DB_ERROR' : 'BAD_REQUEST', message: status === 500 ? 'Could not update artist profile.' : err.message } });
+    }
+  }
+
+  // Public lookup by canonical handle. Private account activity is never included here.
+  if (request.method === 'GET' && /^\/api\/artists\/by-handle\/[a-z0-9_]{2,32}$/i.test(url.pathname)) {
+    const handle = url.pathname.split('/').at(-1).toLowerCase();
+    try {
+      const artist = await prisma.artist.findUnique({ where: { handle }, select: {
+        walletAddress: true, handle: true, displayName: true, bio: true, websiteUrl: true, instagramUrl: true, xUrl: true,
+        approvalStatus: true, createdAt: true, _count: { select: { followers: true } },
+      } });
+      if (!artist || artist.approvalStatus !== 'approved') return send(response, 404, { error: { code: 'ARTIST_NOT_FOUND', message: 'Approved artist profile not found.' } });
+      return send(response, 200, { data: { ...artist, followerCount: artist._count.followers, _count: undefined } });
+    } catch (err) {
+      return send(response, 500, { error: { code: 'DB_ERROR', message: 'Could not load artist profile.' } });
+    }
+  }
+
+  // Following is a persisted relationship and requires a SIWE-authenticated wallet.
+  if ((request.method === 'POST' || request.method === 'DELETE') && /^\/api\/artists\/[a-z0-9_]{2,32}\/follow$/i.test(url.pathname)) {
+    if (await rejectUnauthorized(request, response)) return;
+    const sess = await sessionFromRequest(request);
+    const handle = url.pathname.split('/')[3].toLowerCase();
+    try {
+      const artist = await prisma.artist.findUnique({ where: { handle }, select: { id: true, walletAddress: true, approvalStatus: true } });
+      if (!artist || artist.approvalStatus !== 'approved') return send(response, 404, { error: { code: 'ARTIST_NOT_FOUND', message: 'Approved artist profile not found.' } });
+      if (sess.address.toLowerCase() === artist.walletAddress.toLowerCase()) {
+        return send(response, 400, { error: { code: 'SELF_FOLLOW', message: 'You cannot follow your own artist profile.' } });
+      }
+      if (request.method === 'POST') {
+        await prisma.artistFollow.upsert({
+          where: { followerAddress_artistId: { followerAddress: sess.address.toLowerCase(), artistId: artist.id } },
+          create: { followerAddress: sess.address.toLowerCase(), artistId: artist.id }, update: {},
+        });
+      } else {
+        await prisma.artistFollow.deleteMany({ where: { followerAddress: sess.address.toLowerCase(), artistId: artist.id } });
+      }
+      const followerCount = await prisma.artistFollow.count({ where: { artistId: artist.id } });
+      return send(response, 200, { data: { following: request.method === 'POST', followerCount } });
+    } catch (err) {
+      return send(response, 500, { error: { code: 'DB_ERROR', message: 'Could not update follow relationship.' } });
+    }
+  }
+
   // GET /api/profile/:address — full collector/artist profile + their lots
   if (request.method === 'GET' && /^\/api\/profile\/0x[0-9a-fA-F]+$/.test(url.pathname)) {
     const address = url.pathname.split('/')[3].toLowerCase();
     try {
+      const viewer = await sessionFromRequest(request);
       const [artist, lots, bidsPlaced, notifications] = await Promise.all([
-        prisma.artist.findUnique({ where: { walletAddress: address } }),
+        prisma.artist.findUnique({ where: { walletAddress: address }, include: { _count: { select: { followers: true } } } }),
         prisma.lot.findMany({
           where: { creator: address },
           include: { bids: { orderBy: { timestamp: 'desc' }, take: 1 } },
@@ -605,16 +687,22 @@ const server = http.createServer(async (request, response) => {
           take: 20,
           include: { lot: { select: { title: true, imageUrl: true, status: true, lotId: true } } },
         }),
-        prisma.notification.findMany({
+        viewer?.address?.toLowerCase() === address ? prisma.notification.findMany({
           where: { wallet: address },
           orderBy: { createdAt: 'desc' },
           take: 20,
-        }),
+        }) : Promise.resolve([]),
       ]);
+      const mayViewUnapprovedArtist = viewer && (viewer.address.toLowerCase() === address || ['admin', 'moderator'].includes(getSessionRole(viewer.address)));
+      const profileArtist = artist && (artist.approvalStatus === 'approved' || mayViewUnapprovedArtist)
+        ? { ...artist, followerCount: artist._count.followers, _count: undefined, followers: undefined }
+        : null;
       return send(response, 200, {
         data: {
           address,
-          artist: artist || null,
+          artist: profileArtist,
+          isOwnProfile: viewer?.address?.toLowerCase() === address,
+          viewerFollows: viewer && profileArtist ? Boolean(await prisma.artistFollow.findUnique({ where: { followerAddress_artistId: { followerAddress: viewer.address.toLowerCase(), artistId: artist.id } }, select: { id: true } })) : false,
           lotsCreated: lots.map(formatLotResponse),
           bidsPlaced: bidsPlaced.map((b) => ({
             lotId: b.lot?.lotId,
